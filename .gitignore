@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build output (rebuilt on server)
+dist/
+
+# Environment files with secrets
+.env
+
+# Docker volumes
+redis-data/
+prometheus-data/
+grafana-data/
+
+# OS files
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Logs
+*.log

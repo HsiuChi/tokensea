@@ -1,0 +1,38 @@
+# TokenSea Prometheus Configuration
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # ============================================
+  # Dario Nodes — Scrape /metricsz from each node
+  # ============================================
+  - job_name: 'dario'
+    metrics_path: '/metricsz'
+    static_configs:
+      - targets:
+          - 'dario-1:3456'
+          - 'dario-2:3456'
+          - 'dario-3:3456'
+          # Add more dario nodes as they are scaled
+        labels:
+          cluster: 'tokensea'
+
+  # ============================================
+  # CPA — CLI Proxy API metrics (if available)
+  # ============================================
+  - job_name: 'cpa'
+    static_configs:
+      - targets:
+          - 'cpa:8080'
+        labels:
+          cluster: 'tokensea'
+
+  # ============================================
+  # Prometheus self-monitoring
+  # ============================================
+  - job_name: 'prometheus'
+    static_configs:
+      - targets:
+          - 'localhost:9090'

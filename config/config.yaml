@@ -1,0 +1,63 @@
+# TokenSea CPA Configuration
+# This file configures cli-proxy-api (cpa) to route requests through
+# dario nodes as upstream providers with cloak.mode: "never" (dario
+# handles fingerprinting; cpa only does key distribution and routing).
+#
+# For Claude Team accounts: each node maps to one Team seat (user).
+# Team seats share an organization-level rate limit, but each seat has
+# its own 5h/7d utilization window. Spreading requests across seats
+# maximizes aggregate throughput.
+
+# Downstream API keys — clients authenticate to cpa with these keys
+api-keys:
+  - "tsk-prod-key-001-change-me"
+  - "tsk-prod-key-002-change-me"
+
+# Upstream dario nodes — each node is a Team seat running in its own
+# container. cloak.mode: "never" disables cpa's built-in fingerprint
+# injection since dario handles that.
+#
+# IMPORTANT for Team accounts:
+#   - Each seat has its own OAuth credentials (per-user token)
+#   - Seats share the org-level rate limit, so distributing load
+#     across seats maximizes throughput before hitting org limits
+#   - The representative-claim for Team is "team" (not "max-5x")
+claude-api-key:
+  # Seat 1
+  - key: "dario-internal-key-1"
+    cloak:
+      mode: "never"
+    base-url: "http://dario-1:3456"
+  # Seat 2
+  - key: "dario-internal-key-2"
+    cloak:
+      mode: "never"
+    base-url: "http://dario-2:3456"
+  # Seat 3
+  - key: "dario-internal-key-3"
+    cloak:
+      mode: "never"
+    base-url: "http://dario-3:3456"
+  # Add more seats following the same pattern
+
+# Routing configuration
+routing:
+  # For Team accounts, use "round-robin" instead of "session-affinity"
+  # to spread load evenly across seats and avoid burning one seat's
+  # utilization window while others sit idle. If conversation continuity
+  # is critical (e.g., tool use with multi-turn state), switch to
+  # "session-affinity" with a shorter TTL.
+  strategy: round-robin
+  # Session affinity TTL — only used when strategy is "session-affinity"
+  session-affinity-ttl: 4h
+
+# Retry configuration — on 429 or 5xx, cpa tries the next seat
+request-retry: 3
+max-retry-credentials: 3
+
+# Server configuration
+port: 8080
+host: "0.0.0.0"
+
+# Logging
+log-level: info

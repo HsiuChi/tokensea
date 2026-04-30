@@ -1,0 +1,194 @@
+# TokenSea — Claude Team/Max Subscription Pool Gateway
+#
+# Usage:
+#   docker compose up -d              # Start all services
+#   docker compose up -d dario-1      # Start a single dario node
+#   docker compose logs -f dario-1    # View logs
+#   docker compose down               # Stop all services
+#
+# Before starting, copy .env.example to .env and fill in your credentials.
+# Each dario-N node maps to one Team seat or Max subscription.
+
+services:
+  # ============================================
+  # CPA — CLI Proxy API (Gateway)
+  # ============================================
+  cpa:
+    image: eceasy/cli-proxy-api:latest
+    container_name: tokensea-cpa
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config/config.yaml:/app/config.yaml:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - tokensea
+
+  # ============================================
+  # Redis — Session Cache for CPA
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: tokensea-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tokensea
+
+  # ============================================
+  # Dario Nodes — One per Team Seat (or Max Subscription)
+  # ============================================
+  # Each dario-N service maps to one Team seat (user) or one Max subscription.
+  # For Team accounts:
+  #   - Each seat is a separate user with their own OAuth token
+  #   - Seats share org-level rate limits, so load distribution is key
+  #   - Use round-robin routing (see config.yaml) to spread load evenly
+  # OAuth credentials are injected via environment variables.
+  # The DARIO_API_KEY must match the corresponding key in config.yaml.
+
+  dario-1:
+    build:
+      context: ./dario-modified
+      dockerfile: Dockerfile
+    container_name: tokensea-dario-1
+    restart: unless-stopped
+    environment:
+      - DARIO_API_KEY=${DARIO_INTERNAL_KEY_1}
+      - DARIO_OAUTH_ACCESS_TOKEN=${DARIO_1_OAUTH_ACCESS_TOKEN}
+      - DARIO_OAUTH_REFRESH_TOKEN=${DARIO_1_OAUTH_REFRESH_TOKEN}
+      - DARIO_OAUTH_EXPIRES_AT=${DARIO_1_OAUTH_EXPIRES_AT:-0}
+      - DARIO_OAUTH_SCOPES=${DARIO_1_OAUTH_SCOPES:-user:inference}
+      - DARIO_DEVICE_ID=${DARIO_1_DEVICE_ID:-}
+      - DARIO_ACCOUNT_UUID=${DARIO_1_ACCOUNT_UUID:-}
+      - DARIO_ACCOUNT_ID=${DARIO_1_ACCOUNT_ID:-seat-1}
+      - DARIO_ACCOUNT_TYPE=${DARIO_ACCOUNT_TYPE:-team}
+      - DARIO_HOST=0.0.0.0
+      - DARIO_LISTEN_PORT=3456
+    expose:
+      - "3456"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3456/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    networks:
+      - tokensea
+
+  dario-2:
+    build:
+      context: ./dario-modified
+      dockerfile: Dockerfile
+    container_name: tokensea-dario-2
+    restart: unless-stopped
+    environment:
+      - DARIO_API_KEY=${DARIO_INTERNAL_KEY_2}
+      - DARIO_OAUTH_ACCESS_TOKEN=${DARIO_2_OAUTH_ACCESS_TOKEN}
+      - DARIO_OAUTH_REFRESH_TOKEN=${DARIO_2_OAUTH_REFRESH_TOKEN}
+      - DARIO_OAUTH_EXPIRES_AT=${DARIO_2_OAUTH_EXPIRES_AT:-0}
+      - DARIO_OAUTH_SCOPES=${DARIO_2_OAUTH_SCOPES:-user:inference}
+      - DARIO_DEVICE_ID=${DARIO_2_DEVICE_ID:-}
+      - DARIO_ACCOUNT_UUID=${DARIO_2_ACCOUNT_UUID:-}
+      - DARIO_ACCOUNT_ID=${DARIO_2_ACCOUNT_ID:-seat-2}
+      - DARIO_ACCOUNT_TYPE=${DARIO_ACCOUNT_TYPE:-team}
+      - DARIO_HOST=0.0.0.0
+      - DARIO_LISTEN_PORT=3456
+    expose:
+      - "3456"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3456/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    networks:
+      - tokensea
+
+  dario-3:
+    build:
+      context: ./dario-modified
+      dockerfile: Dockerfile
+    container_name: tokensea-dario-3
+    restart: unless-stopped
+    environment:
+      - DARIO_API_KEY=${DARIO_INTERNAL_KEY_3}
+      - DARIO_OAUTH_ACCESS_TOKEN=${DARIO_3_OAUTH_ACCESS_TOKEN}
+      - DARIO_OAUTH_REFRESH_TOKEN=${DARIO_3_OAUTH_REFRESH_TOKEN}
+      - DARIO_OAUTH_EXPIRES_AT=${DARIO_3_OAUTH_EXPIRES_AT:-0}
+      - DARIO_OAUTH_SCOPES=${DARIO_3_OAUTH_SCOPES:-user:inference}
+      - DARIO_DEVICE_ID=${DARIO_3_DEVICE_ID:-}
+      - DARIO_ACCOUNT_UUID=${DARIO_3_ACCOUNT_UUID:-}
+      - DARIO_ACCOUNT_ID=${DARIO_3_ACCOUNT_ID:-seat-3}
+      - DARIO_ACCOUNT_TYPE=${DARIO_ACCOUNT_TYPE:-team}
+      - DARIO_HOST=0.0.0.0
+      - DARIO_LISTEN_PORT=3456
+    expose:
+      - "3456"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3456/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    networks:
+      - tokensea
+
+  # ============================================
+  # Prometheus — Metrics Collection
+  # ============================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: tokensea-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - tokensea
+
+  # ============================================
+  # Grafana — Monitoring Dashboard
+  # ============================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: tokensea-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+    depends_on:
+      - prometheus
+    networks:
+      - tokensea
+
+# ============================================
+# Volumes
+# ============================================
+volumes:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+
+# ============================================
+# Network
+# ============================================
+networks:
+  tokensea:
+    driver: bridge
