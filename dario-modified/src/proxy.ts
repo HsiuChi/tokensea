@@ -743,8 +743,11 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
     // Single-account mode — existing auth check
     status = await getStatus();
     if (!status.authenticated) {
-      console.error('[dario] Not authenticated. Run `dario login` first.');
-      process.exit(1);
+      // [TokenSea] In container mode, don't exit — allow healthz/metricsz
+      // to work even without OAuth credentials. The proxy will return 503
+      // for actual API requests until credentials are provided.
+      console.warn('[dario] Not authenticated. Health endpoints available; proxy requests will return 503.');
+      console.warn('[dario] Run `dario login` or set DARIO_OAUTH_* environment variables.');
     }
   }
 
@@ -1161,7 +1164,14 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
         }
         accessToken = poolAccount.accessToken;
       } else {
-        accessToken = await getAccessToken();
+        try {
+          accessToken = await getAccessToken();
+        } catch {
+          // [TokenSea] Return 503 when OAuth credentials are not available
+          res.writeHead(503, JSON_HEADERS);
+          res.end(JSON.stringify({ error: 'Not authenticated', message: 'OAuth credentials not configured. Set DARIO_OAUTH_* environment variables.' }));
+          return;
+        }
       }
 
       // Read request body with size limit and timeout (prevents slow-loris)
