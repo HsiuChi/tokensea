@@ -20,7 +20,8 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./config/config.yaml:/app/config.yaml:ro
+      - ./config/config.yaml:/CLIProxyAPI/config.yaml:ro
+      - cpa-auths:/CLIProxyAPI/auths
     depends_on:
       redis:
         condition: service_healthy
@@ -182,6 +183,7 @@ services:
 # Volumes
 # ============================================
 volumes:
+  cpa-auths:
   redis-data:
   prometheus-data:
   grafana-data:
