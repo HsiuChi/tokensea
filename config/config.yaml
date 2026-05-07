@@ -16,24 +16,27 @@ api-keys:
 
 # Claude API keys — each dario node is an upstream entry
 # cloak.mode: "never" disables cpa's built-in fingerprint injection since dario handles that
+# NOTE: Only add nodes that have OAuth credentials configured.
+#       Uncomment entries as you add seats in .env and docker-compose.yml.
 claude-api-key:
   - api-key: "ts-internal-1"
     base-url: "http://dario-1:3456"
     cloak:
       mode: "never"
-  - api-key: "ts-internal-2"
-    base-url: "http://dario-2:3456"
-    cloak:
-      mode: "never"
-  - api-key: "ts-internal-3"
-    base-url: "http://dario-3:3456"
-    cloak:
-      mode: "never"
+  # - api-key: "ts-internal-2"
+  #   base-url: "http://dario-2:3456"
+  #   cloak:
+  #     mode: "never"
+  # - api-key: "ts-internal-3"
+  #   base-url: "http://dario-3:3456"
+  #   cloak:
+  #     mode: "never"
 
-# Routing — round-robin spreads load across Team seats evenly
+# Routing — session-affinity keeps each user's requests on the same seat
+# This prevents multiple sessions from hitting the same OAuth token simultaneously
 routing:
   strategy: "round-robin"
-  session-affinity: false
+  session-affinity: true
   session-affinity-ttl: "4h"
 
 # Retry on 429/5xx — try next dario node
@@ -42,3 +45,9 @@ max-retry-credentials: 3
 
 # Debug
 debug: false
+
+# Management API — CPA built-in web dashboard
+remote-management:
+  allow-remote: true
+  secret-key: "ts-mgmt-key-change-me"
+  disable-control-panel: false

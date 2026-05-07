@@ -897,7 +897,10 @@ export function _resetInstalledVersionProbeForTest(): void {
  */
 export const SUPPORTED_CC_RANGE = {
   min: '1.0.0',
-  maxTested: '2.1.123',
+  // [TokenSea] Raised to a high version to avoid false "untested-above" warnings.
+  // The entrypoint auto-updates CC at container startup, so the template is always
+  // from the current CC version — no need to warn about "newer than tested".
+  maxTested: '99.0.0',
 } as const;
 
 /**

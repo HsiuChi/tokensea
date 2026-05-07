@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { arch, platform } from 'node:process';
 import { getAccessToken, getStatus } from './oauth.js';
-import { buildCCRequest, reverseMapResponse, createStreamingReverseMapper, orderHeadersForOutbound, CC_TEMPLATE, type ToolMapping, type RequestContext, type EffortValue } from './cc-template.js';
+import { buildCCRequest, reverseMapResponse, createStreamingReverseMapper, orderHeadersForOutbound, CC_TEMPLATE, reloadTemplate, type ToolMapping, type RequestContext, type EffortValue } from './cc-template.js';
 import { describeTemplate, detectDrift, checkCCCompat } from './live-fingerprint.js';
 import { AccountPool, computeStickyKey, parseRateLimits, modelFamily, type PoolAccount } from './pool.js';
 import { Analytics, billingBucketFromClaim } from './analytics.js';
@@ -50,20 +50,27 @@ function computeCch(): string {
 }
 
 // Detect installed Claude Code version for the build-tag computation.
-// Falls back to a known-good version if claude isn't on PATH.
-// [TokenSea] Also falls back to DARIO_CC_VERSION env var for containers
-// where CC CLI is not installed.
+// Priority: claude binary > DARIO_CC_VERSION env > template version > hardcoded fallback.
+// [TokenSea] Template version fallback ensures consistency between billing header
+// and the tools/system-prompt being sent (all from the same CC version).
 function detectCliVersion(): string {
   try {
     const out = execSync('claude --version', { timeout: 5000, stdio: 'pipe' }).toString().trim();
-    return out.match(/^([\d]+\.[\d]+\.[\d]+)/)?.[1] ?? '2.1.100';
-  } catch {
-    // [TokenSea] Check environment variable before using hardcoded fallback
-    if (process.env.DARIO_CC_VERSION) {
-      return process.env.DARIO_CC_VERSION;
-    }
-    return '2.1.100';
+    const match = out.match(/^([\d]+\.[\d]+\.[\d]+)/);
+    if (match) return match[1];
+  } catch { /* not installed or failed */ }
+  // [TokenSea] Check environment variable for containers
+  if (process.env.DARIO_CC_VERSION) {
+    return process.env.DARIO_CC_VERSION;
   }
+  // [TokenSea] Fall back to the live template's CC version — this ensures the
+  // billing header version always matches the template's tools/system-prompt.
+  // A mismatch (e.g. template=2.1.129 but billing=2.1.100) is a detectable inconsistency.
+  if (CC_TEMPLATE._version && CC_TEMPLATE._version !== 'unknown') {
+    const m = CC_TEMPLATE._version.match(/^([\d]+\.[\d]+\.[\d]+)/);
+    if (m) return m[1];
+  }
+  return '2.1.100';
 }
 
 /** Extract first user message text from a request body for billing tag computation. */
@@ -751,7 +758,7 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
     }
   }
 
-  const cliVersion = detectCliVersion();
+  let cliVersion = detectCliVersion();
   // Parse --model once at startup. Supports `<provider>:<model>` to force
   // a backend for every request (e.g. `--model=openai:gpt-4o`). Back-compat:
   // bare names like `opus` resolve via MODEL_ALIASES.
@@ -762,50 +769,44 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
   const identity = loadClaudeIdentity();
   if (identity.deviceId) {
     console.log('  Device identity: detected');
+    // [TokenSea] Warn when account_uuid is missing — Anthropic may reject requests without it
+    if (!identity.accountUuid) {
+      console.warn('[dario] WARNING: account_uuid is EMPTY. Set DARIO_ACCOUNT_UUID env var to match the value from ~/.claude/.claude.json → oauthAccount.accountUuid');
+      console.warn('[dario]          Missing account_uuid may cause "OAuth authentication is currently not allowed" errors.');
+    }
   } else {
     console.warn('[dario] WARNING: No Claude Code device identity found. Requests may be billed as Extra Usage.');
     console.warn('[dario] Run Claude Code at least once to generate ~/.claude/.claude.json');
   }
 
-  // Pre-build static headers — matches the set a real Claude Code client sends.
-  const staticHeaders: Record<string, string> = passthrough ? {
-    'accept': 'application/json',
-    'Content-Type': 'application/json',
-  } : {
-    'accept': 'application/json',
-    'Content-Type': 'application/json',
-    'anthropic-dangerous-direct-browser-access': 'true',
-    'user-agent': `claude-cli/${cliVersion} (external, cli)`,
-    'x-app': 'cli',
-    'x-stainless-arch': arch,
-    'x-stainless-lang': 'js',
-    'x-stainless-os': OS_NAME,
-    'x-stainless-package-version': '0.81.0',
-    'x-stainless-retry-count': '0',
-    'x-stainless-runtime': 'node',
-    // Claude Code runs on Bun which reports v24.3.0 as Node compat version
-    'x-stainless-runtime-version': 'v24.3.0',
-  };
-  // Overlay captured header values from the live template (schema v2). This
-  // replaces the hardcoded stainless/user-agent constants with whatever CC
-  // actually emitted on the capture, so a CC release that nudges any of those
-  // values gets reflected automatically on the next template refresh.
-  // Excludes auth + body-framing + session-scoped keys by construction (see
-  // extractStaticHeaderValues in live-fingerprint.ts). No-op when the loaded
-  // template predates v2 or the bundled snapshot is in use.
-  //
-  // `x-api-key` is filtered defensively here too — pre-v3.19.2 captures still
-  // carry `x-api-key: sk-dario-fingerprint-capture` from the MITM spawn env.
-  // Replaying that placeholder alongside a real OAuth Bearer triggers a
-  // "invalid x-api-key" 401 on some account tiers as of 2026-04-17 (dario#42).
-  // The capture filter was updated in v3.19.2 to stop storing it, but the
-  // per-request skip below lets existing caches self-heal without a refresh.
-  if (!passthrough && CC_TEMPLATE.header_values) {
-    for (const [k, v] of Object.entries(CC_TEMPLATE.header_values)) {
-      if (k.toLowerCase() === 'x-api-key') continue;
-      staticHeaders[k] = v;
+  // [TokenSea] Build static headers from the live template's header_values.
+  // This ensures x-stainless-package-version, x-stainless-runtime-version,
+  // user-agent, etc. all match the captured CC version exactly.
+  // The rebuildStaticHeaders() function is called after reloadTemplate() to
+  // pick up the fresh header values from the newly captured template.
+  function rebuildStaticHeaders(): Record<string, string> {
+    if (passthrough) {
+      return { 'accept': 'application/json', 'Content-Type': 'application/json' };
     }
+    const hv = CC_TEMPLATE.header_values || {};
+    return {
+      'accept': 'application/json',
+      'Content-Type': 'application/json',
+      // [TokenSea] REMOVED: anthropic-dangerous-direct-browser-access
+      // Real CC CLI never sends this header. It's a browser-access flag that
+      // would directly signal "not a real CC client" to Anthropic.
+      'user-agent': hv['user-agent'] || `claude-cli/${cliVersion} (external, sdk-cli)`,
+      'x-app': hv['x-app'] || 'cli',
+      'x-stainless-arch': hv['x-stainless-arch'] || arch,
+      'x-stainless-lang': hv['x-stainless-lang'] || 'js',
+      'x-stainless-os': hv['x-stainless-os'] || OS_NAME,
+      'x-stainless-package-version': hv['x-stainless-package-version'] || '0.81.0',
+      'x-stainless-retry-count': hv['x-stainless-retry-count'] || '0',
+      'x-stainless-runtime': hv['x-stainless-runtime'] || 'node',
+      'x-stainless-runtime-version': hv['x-stainless-runtime-version'] || 'v24.3.0',
+    };
   }
+  let staticHeaders = rebuildStaticHeaders();
   let requestCount = 0;
   let failedRequestCount = 0; // [TokenSea] track failures for /healthz and /metricsz
   let activeConcurrent = 0;  // [TokenSea] track concurrent requests for /healthz and /metricsz
@@ -1280,6 +1281,17 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
         userId: req.headers['x-user-id'] as string | undefined,
         timestamp: new Date().toISOString(),
       } : undefined;
+      // [TokenSea] Billing header value — computed inside the template-replay block
+      // but needed outside for the outbound HTTP headers. Declared here so both scopes
+      // can access it. For passthrough mode, compute a minimal billing value upfront.
+      let billingValue = '';
+      if (passthrough) {
+        // Passthrough still needs a valid billing header — without it the request
+        // is missing a header that Anthropic expects from real CC.
+        const buildTag = computeBuildTag('', cliVersion);
+        const cch = computeCch();
+        billingValue = `cc_version=${cliVersion}.${buildTag}; cc_entrypoint=sdk-cli; cch=${cch};`;
+      }
       if (body.length > 0) {
         try {
           const parsed = JSON.parse(body.toString()) as Record<string, unknown>;
@@ -1296,10 +1308,22 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
             // The upstream sees a genuine CC request structure.
 
             const userMsg = extractFirstUserMessage(r);
+            // [TokenSea] Always use the template version for the billing header.
+            // The template replay replaces ALL client content (tools, system prompt,
+            // agent identity) with the template's. If we used the client's CC version
+            // in billing but sent tools from a different CC version, that inconsistency
+            // would be more detectable than using one consistent version throughout.
+            // The template version is always kept current by the entrypoint CC auto-update
+            // + live capture, so it's the single source of truth.
             const buildTag = computeBuildTag(userMsg, cliVersion);
             const cch = computeCch();
             const fullVersion = `${cliVersion}.${buildTag}`;
-            const billingTag = `x-anthropic-billing-header: cc_version=${fullVersion}; cc_entrypoint=sdk-cli; cch=${cch};`;
+            // [TokenSea] cc_entrypoint matches what CC actually sends in its requests.
+            // The live capture observed CC sending "sdk-cli" in user-agent:
+            //   claude-cli/2.1.131 (external, sdk-cli)
+            // Keep in sync with whatever the live capture observes.
+            billingValue = `cc_version=${fullVersion}; cc_entrypoint=sdk-cli; cch=${cch};`;
+            const billingTag = `x-anthropic-billing-header: ${billingValue}`;
             const CACHE_EPHEMERAL = { type: 'ephemeral' as const };
 
             // Session stickiness: rebind the pre-selected pool account to
@@ -1414,6 +1438,14 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
         console.log(`[dario] #${requestCount} ${req.method} ${urlPath}${modelInfo}`);
       }
 
+      // [TokenSea] Detailed per-request logging for ban diagnosis
+      const tsLogIdentity = poolAccount
+        ? { device: poolAccount.identity.deviceId.slice(0, 8) + '...', uuid: poolAccount.identity.accountUuid || '(empty)', session: poolAccount.identity.sessionId.slice(0, 8) + '...' }
+        : { device: identity.deviceId.slice(0, 8) + '...', uuid: identity.accountUuid || '(empty)', session: (preBodySessionId || SESSION_ID).slice(0, 8) + '...' };
+      const tsLogClientUA = req.headers['user-agent'] as string || '';
+      const tsLogClientVer = tsLogClientUA.match(/claude-cli\/([\d.]+)/)?.[1] || '';
+      console.log(`[dario] #${requestCount} req model=${requestModel} cc_template=${CC_TEMPLATE._version || '?'} cc_client=${tsLogClientVer || 'n/a'} device=${tsLogIdentity.device} uuid=${tsLogIdentity.uuid} session=${tsLogIdentity.session} concurrent=${activeConcurrent}`);
+
       // Body dump — -vv / DARIO_LOG_BODIES=1. Runs on the outbound
       // body after the template build so operators see what actually
       // lands on the wire. sanitizeError's redaction strips bearer
@@ -1509,6 +1541,10 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
       const headers: Record<string, string> = {
         ...staticHeaders,
         'Authorization': `Bearer ${accessToken}`,
+        // [TokenSea] Real CC sends x-anthropic-billing-header as an HTTP header too,
+        // not just as a system prompt text block. Without this, the request is
+        // missing a header that Anthropic expects from real CC OAuth requests.
+        'x-anthropic-billing-header': billingValue,
         'x-claude-code-session-id': outboundSessionId,
         'anthropic-version': passthrough ? (req.headers['anthropic-version'] as string || '2023-06-01') : '2023-06-01',
         'anthropic-beta': beta,
@@ -1784,6 +1820,21 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
         return;
       }
 
+      // [TokenSea] Log upstream response status for ban diagnosis
+      const tsLogLatency = Date.now() - startTime;
+      const tsLogReqId = upstream.headers.get('request-id') || '';
+      if (upstream.status >= 400) {
+        // Error responses: log more detail including response body snippet
+        const tsLogPeek = peekedBody || '';
+        const tsLogErrType = tsLogPeek.includes('permission_error') ? 'PERMISSION_ERROR'
+          : tsLogPeek.includes('authentication_error') ? 'AUTH_ERROR'
+          : tsLogPeek.includes('rate_limit_error') ? 'RATE_LIMIT'
+          : 'OTHER_ERROR';
+        console.error(`[dario] #${requestCount} UPSTREAM ${upstream.status} latency=${tsLogLatency}ms err_type=${tsLogErrType} model=${requestModel} req_id=${tsLogReqId} body_snippet=${tsLogPeek.slice(0, 200)}`);
+      } else {
+        console.log(`[dario] #${requestCount} UPSTREAM ${upstream.status} latency=${tsLogLatency}ms model=${requestModel} req_id=${tsLogReqId}`);
+      }
+
       // Non-429 — exit dispatch loop and forward the response to client.
       break;
       } // end dispatchLoop: while (true)
@@ -1822,7 +1873,7 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
       // back to `n/a` in the genuinely-unknown case.
       const billingClaim = upstream.headers.get('anthropic-ratelimit-unified-representative-claim');
       const overageUtil = upstream.headers.get('anthropic-ratelimit-unified-overage-utilization');
-      if (requestCount === 1 || verbose) {
+      if (requestCount === 1 || verbose || upstream.status >= 400) {
         if (billingClaim) {
           let overagePct: string;
           if (overageUtil !== null) {
@@ -2154,9 +2205,24 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
   // the operator has opted into a bundled-only shape (air-gapped runs,
   // reproducible-build CI, deliberate pinning). dario#77.
   if (!opts.noLiveCapture) {
-    void import('./live-fingerprint.js').then(({ refreshLiveFingerprintAsync }) =>
-      refreshLiveFingerprintAsync({ silent: false, force: drift.drifted }).catch(() => { /* noop */ }),
-    );
+    void import('./live-fingerprint.js').then(async ({ refreshLiveFingerprintAsync }) => {
+      const result = await refreshLiveFingerprintAsync({ silent: false, force: drift.drifted }).catch(() => null);
+      // [TokenSea] If the background refresh produced a new template, reload it
+      // into the running process so tools, system prompt, headers, and version
+      // are all current — without requiring a restart.
+      if (result) {
+        reloadTemplate();
+        // Re-derive cliVersion from the fresh template
+        const freshVersion = CC_TEMPLATE._version?.match(/^([\d]+\.[\d]+\.[\d]+)/)?.[1];
+        if (freshVersion) {
+          cliVersion = freshVersion;
+          console.log(`[dario] CC version updated from live capture: v${cliVersion}`);
+        }
+        // Rebuild static headers from the fresh template's header_values
+        staticHeaders = rebuildStaticHeaders();
+        console.log(`[dario] Static headers rebuilt from live template (user-agent: ${staticHeaders['user-agent']})`);
+      }
+    });
   } else {
     console.log('[dario] --no-live-capture: background live fingerprint refresh skipped; using bundled template.');
   }
@@ -2195,32 +2261,16 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
     console.log('');
   });
 
-  // Session presence heartbeat — keeps the OAuth session marked active
-  // (matches the ~5s cadence of a real Claude Code session).
-  const clientId = randomUUID();
-  const connectedAt = new Date().toISOString();
-  let lastPresencePulse = 0;
-
-  const presenceInterval = setInterval(async () => {
-    const now = Date.now();
-    if (now - lastPresencePulse < 5000) return;
-    lastPresencePulse = now;
-    try {
-      const token = await getAccessToken();
-      const presenceUrl = `${ANTHROPIC_API}/v1/code/sessions/${SESSION_ID}/client/presence`;
-      await fetch(presenceUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'anthropic-version': '2023-06-01',
-          'anthropic-client-platform': 'cli',
-        },
-        body: JSON.stringify({ client_id: clientId, connected_at: connectedAt }),
-        signal: AbortSignal.timeout(5000),
-      }).catch(() => {});
-    } catch { /* presence is best-effort */ }
-  }, 5000);
+  // [TokenSea] Session presence heartbeat DISABLED.
+  // The heartbeat sends periodic presence pings to simulate an active CC session,
+  // but the headers and session ID may not match what real CC sends, which could
+  // actually increase detection risk. A missing heartbeat is less suspicious than
+  // a heartbeat with wrong headers/session. If needed, re-enable after verifying
+  // the exact headers real CC uses for presence requests.
+  // const clientId = randomUUID();
+  // const connectedAt = new Date().toISOString();
+  // let lastPresencePulse = 0;
+  // const presenceInterval = setInterval(async () => { ... }, 5000);
 
   // Periodic token refresh (every 15 minutes)
   const refreshInterval = setInterval(async () => {
@@ -2238,7 +2288,7 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
   // Graceful shutdown
   const shutdown = () => {
     console.log('\n[dario] Shutting down...');
-    clearInterval(presenceInterval);
+    // clearInterval(presenceInterval); // [TokenSea] heartbeat disabled
     clearInterval(refreshInterval);
     if (logFileStream) logFileStream.end();
     server.close(() => process.exit(0));

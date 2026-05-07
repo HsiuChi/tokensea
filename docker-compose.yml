@@ -49,6 +49,7 @@ services:
   # ============================================
   # Dario Nodes — One per Team Seat (or Max Subscription)
   # ============================================
+  # Uncomment dario-2 and dario-3 when OAuth credentials are configured in .env
   # Each dario-N service maps to one Team seat (user) or one Max subscription.
   # For Team accounts:
   #   - Each seat is a separate user with their own OAuth token
@@ -86,63 +87,65 @@ services:
     networks:
       - tokensea
 
-  dario-2:
-    build:
-      context: ./dario-modified
-      dockerfile: Dockerfile
-    container_name: tokensea-dario-2
-    restart: unless-stopped
-    environment:
-      - DARIO_API_KEY=${DARIO_INTERNAL_KEY_2}
-      - DARIO_OAUTH_ACCESS_TOKEN=${DARIO_2_OAUTH_ACCESS_TOKEN}
-      - DARIO_OAUTH_REFRESH_TOKEN=${DARIO_2_OAUTH_REFRESH_TOKEN}
-      - DARIO_OAUTH_EXPIRES_AT=${DARIO_2_OAUTH_EXPIRES_AT:-0}
-      - DARIO_OAUTH_SCOPES=${DARIO_2_OAUTH_SCOPES:-user:inference}
-      - DARIO_DEVICE_ID=${DARIO_2_DEVICE_ID:-}
-      - DARIO_ACCOUNT_UUID=${DARIO_2_ACCOUNT_UUID:-}
-      - DARIO_ACCOUNT_ID=${DARIO_2_ACCOUNT_ID:-seat-2}
-      - DARIO_ACCOUNT_TYPE=${DARIO_ACCOUNT_TYPE:-team}
-      - DARIO_HOST=0.0.0.0
-      - DARIO_LISTEN_PORT=3456
-    expose:
-      - "3456"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3456/healthz"]
-      interval: 30s
-      timeout: 5s
-      start_period: 15s
-      retries: 3
-    networks:
-      - tokensea
+  # dario-2 — Uncomment when seat-2 OAuth credentials are available
+  # dario-2:
+  #   build:
+  #     context: ./dario-modified
+  #     dockerfile: Dockerfile
+  #   container_name: tokensea-dario-2
+  #   restart: unless-stopped
+  #   environment:
+  #     - DARIO_API_KEY=${DARIO_INTERNAL_KEY_2}
+  #     - DARIO_OAUTH_ACCESS_TOKEN=${DARIO_2_OAUTH_ACCESS_TOKEN}
+  #     - DARIO_OAUTH_REFRESH_TOKEN=${DARIO_2_OAUTH_REFRESH_TOKEN}
+  #     - DARIO_OAUTH_EXPIRES_AT=${DARIO_2_OAUTH_EXPIRES_AT:-0}
+  #     - DARIO_OAUTH_SCOPES=${DARIO_2_OAUTH_SCOPES:-user:inference}
+  #     - DARIO_DEVICE_ID=${DARIO_2_DEVICE_ID:-}
+  #     - DARIO_ACCOUNT_UUID=${DARIO_2_ACCOUNT_UUID:-}
+  #     - DARIO_ACCOUNT_ID=${DARIO_2_ACCOUNT_ID:-seat-2}
+  #     - DARIO_ACCOUNT_TYPE=${DARIO_ACCOUNT_TYPE:-team}
+  #     - DARIO_HOST=0.0.0.0
+  #     - DARIO_LISTEN_PORT=3456
+  #   expose:
+  #     - "3456"
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:3456/healthz"]
+  #     interval: 30s
+  #     timeout: 5s
+  #     start_period: 15s
+  #     retries: 3
+  #   networks:
+  #     - tokensea
 
-  dario-3:
-    build:
-      context: ./dario-modified
-      dockerfile: Dockerfile
-    container_name: tokensea-dario-3
-    restart: unless-stopped
-    environment:
-      - DARIO_API_KEY=${DARIO_INTERNAL_KEY_3}
-      - DARIO_OAUTH_ACCESS_TOKEN=${DARIO_3_OAUTH_ACCESS_TOKEN}
-      - DARIO_OAUTH_REFRESH_TOKEN=${DARIO_3_OAUTH_REFRESH_TOKEN}
-      - DARIO_OAUTH_EXPIRES_AT=${DARIO_3_OAUTH_EXPIRES_AT:-0}
-      - DARIO_OAUTH_SCOPES=${DARIO_3_OAUTH_SCOPES:-user:inference}
-      - DARIO_DEVICE_ID=${DARIO_3_DEVICE_ID:-}
-      - DARIO_ACCOUNT_UUID=${DARIO_3_ACCOUNT_UUID:-}
-      - DARIO_ACCOUNT_ID=${DARIO_3_ACCOUNT_ID:-seat-3}
-      - DARIO_ACCOUNT_TYPE=${DARIO_ACCOUNT_TYPE:-team}
-      - DARIO_HOST=0.0.0.0
-      - DARIO_LISTEN_PORT=3456
-    expose:
-      - "3456"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3456/healthz"]
-      interval: 30s
-      timeout: 5s
-      start_period: 15s
-      retries: 3
-    networks:
-      - tokensea
+  # dario-3 — Uncomment when seat-3 OAuth credentials are available
+  # dario-3:
+  #   build:
+  #     context: ./dario-modified
+  #     dockerfile: Dockerfile
+  #   container_name: tokensea-dario-3
+  #   restart: unless-stopped
+  #   environment:
+  #     - DARIO_API_KEY=${DARIO_INTERNAL_KEY_3}
+  #     - DARIO_OAUTH_ACCESS_TOKEN=${DARIO_3_OAUTH_ACCESS_TOKEN}
+  #     - DARIO_OAUTH_REFRESH_TOKEN=${DARIO_3_OAUTH_REFRESH_TOKEN}
+  #     - DARIO_OAUTH_EXPIRES_AT=${DARIO_3_OAUTH_EXPIRES_AT:-0}
+  #     - DARIO_OAUTH_SCOPES=${DARIO_3_OAUTH_SCOPES:-user:inference}
+  #     - DARIO_DEVICE_ID=${DARIO_3_DEVICE_ID:-}
+  #     - DARIO_ACCOUNT_UUID=${DARIO_3_ACCOUNT_UUID:-}
+  #     - DARIO_ACCOUNT_ID=${DARIO_3_ACCOUNT_ID:-seat-3}
+  #     - DARIO_ACCOUNT_TYPE=${DARIO_ACCOUNT_TYPE:-team}
+  #     - DARIO_HOST=0.0.0.0
+  #     - DARIO_LISTEN_PORT=3456
+  #   expose:
+  #     - "3456"
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:3456/healthz"]
+  #     interval: 30s
+  #     timeout: 5s
+  #     start_period: 15s
+  #     retries: 3
+  #   networks:
+  #     - tokensea
 
   # ============================================
   # Prometheus — Metrics Collection

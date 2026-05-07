@@ -13,8 +13,26 @@ import { loadTemplate, TemplateData } from './live-fingerprint.js';
 // Load template at module init — prefer live cache, fall back to bundled.
 const TEMPLATE: TemplateData = loadTemplate({ silent: true });
 
-/** The loaded template itself — source, version, capture age, all fields. Startup banners and drift checks read this directly. */
-export const CC_TEMPLATE: TemplateData = TEMPLATE;
+/** The loaded template — source, version, capture age, all fields. Startup banners and drift checks read this directly. */
+export let CC_TEMPLATE: TemplateData = TEMPLATE;
+
+/**
+ * [TokenSea] Reload the template from disk (live cache or bundled).
+ * Called after a background live fingerprint refresh completes so the
+ * current process picks up the fresh template (tools, system prompt,
+ * headers, version) without requiring a restart.
+ *
+ * Note: CC_TOOL_DEFINITIONS / CC_SYSTEM_PROMPT / CC_AGENT_IDENTITY are
+ * computed from the initial template load and remain frozen. Code that
+ * needs the latest values should read from CC_TEMPLATE directly after
+ * reload. The proxy startup code re-reads version and header_values from
+ * CC_TEMPLATE for this reason.
+ */
+export function reloadTemplate(): void {
+  const fresh = loadTemplate({ silent: true });
+  CC_TEMPLATE = fresh;
+  console.log(`[dario] Template reloaded: CC v${fresh._version} (${fresh._source || 'unknown'} source, captured ${fresh._captured})`);
+}
 
 /**
  * Tools CC only ships on a specific platform. The bundled template is a
@@ -53,6 +71,25 @@ export const CC_SYSTEM_PROMPT = TEMPLATE.system_prompt;
 
 /** CC's agent identity string. */
 export const CC_AGENT_IDENTITY = TEMPLATE.agent_identity;
+
+/**
+ * [TokenSea] Get the current tool definitions from the latest template.
+ * Unlike CC_TOOL_DEFINITIONS (frozen at module load), this reads from
+ * CC_TEMPLATE which is updated by reloadTemplate() after live captures.
+ */
+export function getCurrentTools() {
+  return filterToolsForPlatform(CC_TEMPLATE.tools, process.platform);
+}
+
+/** [TokenSea] Get the current system prompt from the latest template. */
+export function getCurrentSystemPrompt(): string {
+  return CC_TEMPLATE.system_prompt;
+}
+
+/** [TokenSea] Get the current agent identity from the latest template. */
+export function getCurrentAgentIdentity(): string {
+  return CC_TEMPLATE.agent_identity;
+}
 
 /**
  * Apply the live template's captured header_order to an outbound header
@@ -1169,16 +1206,21 @@ export function buildCCRequest(
   //   [0] billing tag (no cache)
   //   [1] agent identity (1h cache)
   //   [2] CC's full 25KB system prompt + client's custom prompt appended (1h cache)
+  // [TokenSea] Use dynamic getters (getCurrentSystemPrompt etc.) instead of
+  // frozen CC_SYSTEM_PROMPT so reloadTemplate() takes effect at runtime.
+  const currentSystemPrompt = getCurrentSystemPrompt();
+  const currentAgentIdentity = getCurrentAgentIdentity();
+  const currentTools = getCurrentTools();
   const fullSystemPrompt = systemText
-    ? `${CC_SYSTEM_PROMPT}\n\n${systemText}`
-    : CC_SYSTEM_PROMPT;
+    ? `${currentSystemPrompt}\n\n${systemText}`
+    : currentSystemPrompt;
 
   const ccRequest: Record<string, unknown> = {
     model,
     messages,
     system: [
       { type: 'text', text: billingTag },
-      { type: 'text', text: CC_AGENT_IDENTITY, cache_control: cacheControl },
+      { type: 'text', text: currentAgentIdentity, cache_control: cacheControl },
       { type: 'text', text: fullSystemPrompt, cache_control: cacheControl },
     ],
   };
@@ -1199,29 +1241,32 @@ export function buildCCRequest(
       ccRequest.tools = clientTools;
     } else if (effectiveMergeTools) {
       const ccNames = new Set(
-        (CC_TOOL_DEFINITIONS as Array<{ name: string }>).map((t) => t.name.toLowerCase()),
+        (currentTools as Array<{ name: string }>).map((t) => t.name.toLowerCase()),
       );
       const appended = clientTools.filter((t) => {
         const name = (t.name as string | undefined)?.toLowerCase();
         return name !== undefined && !ccNames.has(name);
       });
-      ccRequest.tools = [...CC_TOOL_DEFINITIONS, ...appended];
+      ccRequest.tools = [...currentTools, ...appended];
     } else {
-      ccRequest.tools = CC_TOOL_DEFINITIONS;
+      ccRequest.tools = currentTools;
     }
   } else if (effectiveMergeTools) {
     // Operator opted into merge but the client sent no tools. Still
     // emit the CC base array — that preserves the fingerprint shape
     // (zero-tools requests are themselves a divergence from CC's
     // wire footprint).
-    ccRequest.tools = CC_TOOL_DEFINITIONS;
+    ccRequest.tools = currentTools;
   }
 
   // Metadata
+  // [TokenSea] Real CC sends user_id fields in alphabetical order:
+  // account_uuid, device_id, session_id. The stringified JSON is a fingerprint —
+  // different field order produces different bytes on the wire.
   ccRequest.metadata = {
     user_id: JSON.stringify({
-      device_id: identity.deviceId,
       account_uuid: identity.accountUuid,
+      device_id: identity.deviceId,
       session_id: identity.sessionId,
     }),
   };
