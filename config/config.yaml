@@ -1,64 +1,52 @@
 # TokenSea CPA Configuration
 # Configured for cli-proxy-api (cpa) v6.9+
-# Each dario node is an upstream with cloak.mode: "never" (dario handles fingerprinting)
 
-# Server
 host: "0.0.0.0"
 port: 8080
 
-# Auth directory
 auth-dir: "/CLIProxyAPI/auths"
 
-# API keys — clients authenticate to cpa with these keys
 api-keys:
   - "tsk-prod-key-001-change-me"
   - "tsk-prod-key-002-change-me"
+  - "ts-internal-1"
+  - "ts-codex-internal-1"
 
-# Claude API keys — each dario node is an upstream entry
-# cloak.mode: "never" disables cpa's built-in fingerprint injection since dario handles that
-# NOTE: Only add nodes that have OAuth credentials configured.
-#       Uncomment entries as you add seats in .env and docker-compose.yml.
 claude-api-key:
   - api-key: "ts-internal-1"
     base-url: "http://dario-1:3456"
     cloak:
       mode: "never"
-  # - api-key: "ts-internal-2"
-  #   base-url: "http://dario-2:3456"
-  #   cloak:
-  #     mode: "never"
-  # - api-key: "ts-internal-3"
-  #   base-url: "http://dario-3:3456"
-  #   cloak:
-  #     mode: "never"
 
-# OpenAI/Codex API keys — each codex-dario node is an upstream entry
-# cloak.mode: "never" — codex-dario handles wire-fidelity, CPA just routes
 codex-api-key:
   - api-key: "ts-codex-internal-1"
     base-url: "http://codex-dario-1:3457"
+    models:
+      - name: "gpt-5.5"
+        alias: "gpt-5.5"
+      - name: "o3"
+        alias: "o3"
+      - name: "o4-mini"
+        alias: "o4-mini"
+      - name: "gpt-4.1"
+        alias: "gpt-4.1"
+      - name: "gpt-4.1-mini"
+        alias: "gpt-4.1-mini"
+      - name: "gpt-4.1-nano"
+        alias: "gpt-4.1-nano"
     cloak:
       mode: "never"
-  # - api-key: "ts-codex-internal-2"
-  #   base-url: "http://codex-dario-2:3457"
-  #   cloak:
-  #     mode: "never"
 
-# Routing — session-affinity keeps each user's requests on the same seat
-# This prevents multiple sessions from hitting the same OAuth token simultaneously
 routing:
   strategy: "round-robin"
   session-affinity: true
   session-affinity-ttl: "4h"
 
-# Retry on 429/5xx — try next dario node
 request-retry: 3
 max-retry-credentials: 3
 
-# Debug
 debug: false
 
-# Management API — CPA built-in web dashboard
 remote-management:
   allow-remote: true
   secret-key: "ts-mgmt-key-change-me"

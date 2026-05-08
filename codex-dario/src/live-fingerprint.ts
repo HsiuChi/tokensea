@@ -34,35 +34,9 @@ export interface TemplateData {
   system_prompt: string;
   tools: Array<Record<string, unknown>>;
   agent_identity: string;
-
-  // v4 fields
-  /**
-   * The Codex entrypoint identifier, extracted from the `originator` header.
-   * Real Codex CLI typically sends `"codex_cli_rs"`. Schema v4.
-   */
-  cc_entrypoint?: string;
-  /**
-   * Not used for Codex (no Anthropic billing header). Undefined always.
-   * Kept for interface parity with dario. Schema v4.
-   */
-  billing_header_pattern?: string;
-  /**
-   * Not populated for Codex (Rust binary cannot H2 MITM). Undefined always.
-   * Codex uses HTTP/1.1; the MITM server stays HTTP/1.1 plaintext because
-   * the Rust binary does not accept self-signed TLS certificates.
-   * Kept for interface parity with dario. Schema v4.
-   */
-  h2_settings?: {
-    HEADER_TABLE_SIZE?: number;
-    MAX_CONCURRENT_STREAMS?: number;
-    INITIAL_WINDOW_SIZE?: number;
-    MAX_FRAME_SIZE?: number;
-    MAX_HEADER_LIST_SIZE?: number;
-    ENABLE_PUSH?: number;
-  };
 }
 
-const CURRENT_SCHEMA_VERSION = 4;
+const CURRENT_SCHEMA_VERSION = 2;
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 function getTemplateDir(): string {
@@ -155,12 +129,6 @@ function EMPTY_TEMPLATE(): TemplateData {
 /**
  * Run a live fingerprint capture by spawning Codex CLI against a
  * loopback MITM endpoint.
- *
- * MITM stays HTTP/1.1 plaintext because Codex is a Rust binary that
- * does not accept self-signed TLS certificates (no NODE_TLS_REJECT_UNAUTHORIZED
- * equivalent). H2/TLS fingerprint fields (h2_settings, billing_header_pattern)
- * remain undefined on codex-dario templates — they exist only for interface
- * parity with dario.
  */
 export async function captureLiveFingerprint(): Promise<TemplateData | null> {
   if (process.env.CODEX_DARIO_NO_LIVE_CAPTURE === '1') {
@@ -320,9 +288,6 @@ function extractTemplateFromRequest(req: IncomingMessage, body: string): Templat
   const versionMatch = ua.match(/codex_cli_rs\/([\d.]+)/);
   const version = versionMatch?.[1] || 'unknown';
 
-  // v4: cc_entrypoint from originator header
-  const ccEntrypoint = headerValues['originator'] || undefined;
-
   return {
     _version: version,
     _source: 'live',
@@ -335,9 +300,6 @@ function extractTemplateFromRequest(req: IncomingMessage, body: string): Templat
     system_prompt: systemPrompt,
     tools,
     agent_identity: agentIdentity,
-    cc_entrypoint: ccEntrypoint,
-    // billing_header_pattern: undefined — Codex doesn't use Anthropic billing header
-    // h2_settings: undefined — Codex is a Rust binary, MITM stays HTTP/1.1
   };
 }
 

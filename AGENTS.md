@@ -1,13 +1,13 @@
 <claude-mem-context>
 # Memory Context
 
-# [tokensea] recent context, 2026-05-08 2:58pm GMT+8
+# [tokensea] recent context, 2026-05-07 2:31pm GMT+8
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 32 obs (6,394t read) | 369,997t work | 98% savings
+Stats: 24 obs (4,460t read) | 205,235t work | 98% savings
 
 ### May 7, 2026
 1 11:18a 🔵 探索项目文件和远程服务器连接
@@ -34,14 +34,6 @@ Stats: 32 obs (6,394t read) | 369,997t work | 98% savings
 24 12:36p 🔵 Codex 超级能力技能系统初始化完成
 25 2:28p 🔵 图像生成能力查询
 26 " 🔵 Claude Code 图像生成能力已启用
-27 4:11p 🔵 Codex Superpowers 技能系统初始化
-33 9:31p 🔵 tokensea 项目 Superpowers 技能系统初始化
-34 9:32p 🔵 tokensea 项目架构：双协议订阅池网关
-35 " 🔵 CPA 管理面板安全漏洞：management.html 无需鉴权可访问
-36 " 🔵 dario-modified 核心指纹伪造机制：billing header、header 顺序、TLS 指纹三层对齐
-37 " 🔵 dario-modified 请求净化管道：orchestration 标签剥离与框架标识符擦除
-38 9:33p 🔵 dario-modified /healthz 端点结构与 CPA 配置默认密钥风险
-39 " 🟣 新增 healthzStatusCode() 导出函数，修复 /healthz HTTP 状态码
 
-Access 370k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 205k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>

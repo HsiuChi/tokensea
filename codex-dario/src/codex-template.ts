@@ -77,7 +77,7 @@ export function buildCodexRequest(opts: {
       'User-Agent': userAgent,
       'Content-Type': 'application/json',
       'Accept': 'text/event-stream',
-      'Originator': template.cc_entrypoint || 'codex_cli_rs',
+      'Originator': 'codex_cli_rs',
     };
 
     if (chatgptAccountId) {
@@ -99,7 +99,7 @@ export function buildCodexRequest(opts: {
     headers['User-Agent'] = userAgent;
     headers['Content-Type'] = 'application/json';
     headers['Accept'] = 'text/event-stream';
-    headers['Originator'] = template.cc_entrypoint || 'codex_cli_rs';
+    headers['Originator'] = 'codex_cli_rs';
     if (chatgptAccountId) {
       headers['ChatGPT-Account-Id'] = chatgptAccountId;
     }

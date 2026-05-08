@@ -2,7 +2,7 @@
   "_version": "0.128.0",
   "_source": "bundled",
   "_captured": "2026-05-07T00:00:00.000Z",
-  "_schemaVersion": 4,
+  "_schemaVersion": 2,
   "header_order": [
     "Authorization",
     "User-Agent",
@@ -28,6 +28,5 @@
   "anthropic_beta": "",
   "system_prompt": "",
   "tools": [],
-  "agent_identity": "codex_cli_rs",
-  "cc_entrypoint": "codex_cli_rs"
+  "agent_identity": "codex_cli_rs"
 }

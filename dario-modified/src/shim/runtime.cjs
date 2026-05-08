@@ -191,7 +191,7 @@ function rewriteHeaders(headers, tmpl) {
     snapshot.set('user-agent', `claude-cli/${tmpl.cc_version} (external, cli)`);
     snapshot.set('x-anthropic-billing-header', `cc_version=${tmpl.cc_version}`);
   }
-  snapshot.set('anthropic-beta', tmpl.anthropic_beta || 'claude-code-20250219');
+  snapshot.set('anthropic-beta', tmpl.anthropic_beta || 'oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,claude-code-20250219,advisor-tool-2026-03-01,extended-cache-ttl-2025-04-11');
 
   if (!Array.isArray(tmpl.header_order) || tmpl.header_order.length === 0) {
     return [...snapshot.entries()];
