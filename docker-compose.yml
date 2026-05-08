@@ -19,6 +19,7 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
+      - "1455:1455"   # Codex OAuth callback
     volumes:
       - ./config/config.yaml:/CLIProxyAPI/config.yaml:ro
       - cpa-auths:/CLIProxyAPI/auths
@@ -76,8 +77,8 @@ services:
       - DARIO_ACCOUNT_TYPE=${DARIO_ACCOUNT_TYPE:-team}
       - DARIO_HOST=0.0.0.0
       - DARIO_LISTEN_PORT=3456
-    expose:
-      - "3456"
+    ports:
+      - "3456:3456"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3456/healthz"]
       interval: 30s
@@ -140,6 +141,66 @@ services:
   #     - "3456"
   #   healthcheck:
   #     test: ["CMD", "curl", "-f", "http://localhost:3456/healthz"]
+  #     interval: 30s
+  #     timeout: 5s
+  #     start_period: 15s
+  #     retries: 3
+  #   networks:
+  #     - tokensea
+
+  # ============================================
+  # Codex-Dario Nodes — One per OpenAI/Codex Subscription
+  # ============================================
+  # Wire-fidelity proxy for OpenAI Codex subscriptions.
+  # Uses Rust tls-shim to match Codex CLI's TLS fingerprint.
+  # Each codex-dario-N service maps to one Codex subscription seat.
+
+  codex-dario-1:
+    build:
+      context: ./codex-dario
+      dockerfile: Dockerfile
+    container_name: tokensea-codex-dario-1
+    restart: unless-stopped
+    environment:
+      - CODEX_DARIO_API_KEY=${CODEX_DARIO_INTERNAL_KEY_1}
+      - CODEX_DARIO_OAUTH_ACCESS_TOKEN=${CODEX_DARIO_1_OAUTH_ACCESS_TOKEN}
+      - CODEX_DARIO_OAUTH_REFRESH_TOKEN=${CODEX_DARIO_1_OAUTH_REFRESH_TOKEN}
+      - CODEX_DARIO_OAUTH_EXPIRES_AT=${CODEX_DARIO_1_OAUTH_EXPIRES_AT:-0}
+      - CODEX_DARIO_CHATGPT_ACCOUNT_ID=${CODEX_DARIO_1_CHATGPT_ACCOUNT_ID:-}
+      - CODEX_DARIO_ACCOUNT_ID=${CODEX_DARIO_1_ACCOUNT_ID:-codex-seat-1}
+      - CODEX_DARIO_HOST=0.0.0.0
+      - CODEX_DARIO_LISTEN_PORT=3457
+    expose:
+      - "3457"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3457/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    networks:
+      - tokensea
+
+  # codex-dario-2 — Uncomment when codex-seat-2 credentials are available
+  # codex-dario-2:
+  #   build:
+  #     context: ./codex-dario
+  #     dockerfile: Dockerfile
+  #   container_name: tokensea-codex-dario-2
+  #   restart: unless-stopped
+  #   environment:
+  #     - CODEX_DARIO_API_KEY=${CODEX_DARIO_INTERNAL_KEY_2}
+  #     - CODEX_DARIO_OAUTH_ACCESS_TOKEN=${CODEX_DARIO_2_OAUTH_ACCESS_TOKEN}
+  #     - CODEX_DARIO_OAUTH_REFRESH_TOKEN=${CODEX_DARIO_2_OAUTH_REFRESH_TOKEN}
+  #     - CODEX_DARIO_OAUTH_EXPIRES_AT=${CODEX_DARIO_2_OAUTH_EXPIRES_AT:-0}
+  #     - CODEX_DARIO_CHATGPT_ACCOUNT_ID=${CODEX_DARIO_2_CHATGPT_ACCOUNT_ID:-}
+  #     - CODEX_DARIO_ACCOUNT_ID=${CODEX_DARIO_2_ACCOUNT_ID:-codex-seat-2}
+  #     - CODEX_DARIO_HOST=0.0.0.0
+  #     - CODEX_DARIO_LISTEN_PORT=3457
+  #   expose:
+  #     - "3457"
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:3457/healthz"]
   #     interval: 30s
   #     timeout: 5s
   #     start_period: 15s

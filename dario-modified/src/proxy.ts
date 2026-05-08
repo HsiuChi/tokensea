@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { arch, platform } from 'node:process';
 import { getAccessToken, getStatus } from './oauth.js';
-import { buildCCRequest, reverseMapResponse, createStreamingReverseMapper, orderHeadersForOutbound, CC_TEMPLATE, reloadTemplate, type ToolMapping, type RequestContext, type EffortValue } from './cc-template.js';
+import { buildCCRequest, reverseMapResponse, createStreamingReverseMapper, CC_TEMPLATE, reloadTemplate, type ToolMapping, type RequestContext, type EffortValue } from './cc-template.js';
 import { describeTemplate, detectDrift, checkCCCompat } from './live-fingerprint.js';
 import { AccountPool, computeStickyKey, parseRateLimits, modelFamily, type PoolAccount } from './pool.js';
 import { Analytics, billingBucketFromClaim } from './analytics.js';
@@ -14,6 +14,9 @@ import { loadAllAccounts, loadAccount, refreshAccountToken } from './accounts.js
 import { getOpenAIBackend, isOpenAIModel, forwardToOpenAI, type BackendCredentials } from './openai-backend.js';
 import { RequestQueue, QueueFullError, QueueTimeoutError, DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_QUEUED, DEFAULT_QUEUE_TIMEOUT_MS } from './request-queue.js';
 import { redactSecrets } from './redact.js';
+import { UpstreamClient } from './upstream-client.js';
+import { TlsSidecarClient, headersToRecord } from './shim/tls-sidecar-client.js';
+import { classifyAuxRequest, forwardAuxRequest, type AuxResult } from './aux-proxy.js';
 
 const ANTHROPIC_API = 'https://api.anthropic.com';
 const DEFAULT_PORT = 3456;
@@ -186,9 +189,10 @@ export function parseProviderPrefix(model: string): { provider: 'openai' | 'clau
 // Beta prefixes that require Extra Usage to be ENABLED on the account.
 // context-management and prompt-caching-scope are safe — billing is determined
 // solely by the OAuth token's subscription type, not by beta flags.
-// Only extended-cache-ttl actually requires Extra Usage availability.
-const BILLABLE_BETA_PREFIXES = [
-  'extended-cache-ttl-',   // Extended cache TTLs — requires Extra Usage enabled
+// NOTE: extended-cache-ttl was previously filtered here, but real CC v2.1.133
+// sends it unconditionally — filtering it creates a detectable difference.
+const BILLABLE_BETA_PREFIXES: string[] = [
+  // (empty — no prefixes filtered; CC sends all flags including extended-cache-ttl)
 ];
 
 /** Filter out billable betas from client-provided beta header. */
@@ -779,34 +783,35 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
     console.warn('[dario] Run Claude Code at least once to generate ~/.claude/.claude.json');
   }
 
-  // [TokenSea] Build static headers from the live template's header_values.
-  // This ensures x-stainless-package-version, x-stainless-runtime-version,
-  // user-agent, etc. all match the captured CC version exactly.
-  // The rebuildStaticHeaders() function is called after reloadTemplate() to
-  // pick up the fresh header values from the newly captured template.
-  function rebuildStaticHeaders(): Record<string, string> {
-    if (passthrough) {
-      return { 'accept': 'application/json', 'Content-Type': 'application/json' };
+  // [TokenSea] SDK-based upstream client for CC-shaped requests.
+  // The @anthropic-ai/sdk (v0.81.0) handles x-stainless-* headers,
+  // header ordering, anthropic-dangerous-direct-browser-access,
+  // Authorization: Bearer, and ?beta=true — matching real CC exactly.
+  // Passthrough mode uses raw fetch with minimal headers instead.
+  // Note: x-stainless-* values come from SDK auto-detection + defaults
+  // in UpstreamClient, NOT from the template (template may be from a
+  // different OS, e.g. Windows capture → would send wrong OS value).
+  const upstreamClient = new UpstreamClient({
+    cliVersion,
+  });
+
+  // TLS sidecar — when running on Bun, spawn a Node.js child process
+  // for outbound HTTPS so the TLS fingerprint (OpenSSL) matches real CC.
+  // On Node.js or shim mode, the fingerprint already matches — no sidecar needed.
+  const sidecarClient = runtimeFp.runtime === 'bun' ? new TlsSidecarClient() : null;
+  if (sidecarClient) {
+    const started = await sidecarClient.start();
+    if (started) {
+      console.log('  TLS sidecar: active (Node.js OpenSSL fingerprint)');
+    } else {
+      console.warn('[dario] TLS sidecar: failed to start — outbound TLS will use Bun (BoringSSL fingerprint diverges from CC)');
     }
-    const hv = CC_TEMPLATE.header_values || {};
-    return {
-      'accept': 'application/json',
-      'Content-Type': 'application/json',
-      // [TokenSea] REMOVED: anthropic-dangerous-direct-browser-access
-      // Real CC CLI never sends this header. It's a browser-access flag that
-      // would directly signal "not a real CC client" to Anthropic.
-      'user-agent': hv['user-agent'] || `claude-cli/${cliVersion} (external, sdk-cli)`,
-      'x-app': hv['x-app'] || 'cli',
-      'x-stainless-arch': hv['x-stainless-arch'] || arch,
-      'x-stainless-lang': hv['x-stainless-lang'] || 'js',
-      'x-stainless-os': hv['x-stainless-os'] || OS_NAME,
-      'x-stainless-package-version': hv['x-stainless-package-version'] || '0.81.0',
-      'x-stainless-retry-count': hv['x-stainless-retry-count'] || '0',
-      'x-stainless-runtime': hv['x-stainless-runtime'] || 'node',
-      'x-stainless-runtime-version': hv['x-stainless-runtime-version'] || 'v24.3.0',
-    };
   }
-  let staticHeaders = rebuildStaticHeaders();
+
+  // Passthrough mode: minimal headers only (no SDK shaping)
+  function passthroughHeaders(): Record<string, string> {
+    return { 'accept': 'application/json', 'Content-Type': 'application/json' };
+  }
   let requestCount = 0;
   let failedRequestCount = 0; // [TokenSea] track failures for /healthz and /metricsz
   let activeConcurrent = 0;  // [TokenSea] track concurrent requests for /healthz and /metricsz
@@ -839,7 +844,7 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
   // fallback string shim/runtime.cjs uses (kept in sync so proxy and shim
   // never diverge on the wire). Computed once per proxy because it's a
   // function of the loaded template, not of the request.
-  const BETA_FALLBACK = 'claude-code-20250219,oauth-2025-04-20,context-1m-2025-08-07,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,advisor-tool-2026-03-01,effort-2025-11-24';
+  const BETA_FALLBACK = 'oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,claude-code-20250219,advisor-tool-2026-03-01,extended-cache-ttl-2025-04-11';
   let betaBase = CC_TEMPLATE.anthropic_beta || BETA_FALLBACK;
   // `oauth-2025-04-20` is CC's OAuth-enablement beta flag. It is NOT present in
   // the live-captured beta set because dario's fingerprint capture spawns CC
@@ -922,7 +927,7 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
   const JSON_HEADERS = { 'Content-Type': 'application/json', ...SECURITY_HEADERS };
   const MODELS_JSON = JSON.stringify(OPENAI_MODELS_LIST);
   const ERR_UNAUTH = JSON.stringify({ error: 'Unauthorized', message: 'Invalid or missing API key' });
-  const ERR_FORBIDDEN = JSON.stringify({ error: 'Forbidden', message: 'Path not allowed. Supported paths: POST /v1/messages, POST /v1/chat/completions, GET /v1/models' });
+  const ERR_FORBIDDEN = JSON.stringify({ error: 'Forbidden', message: 'Path not allowed. Supported paths: POST /v1/messages, POST /v1/chat/completions, GET /v1/models, and CC auxiliary API paths' });
   const ERR_METHOD = JSON.stringify({ error: 'Method not allowed' });
 
   function checkAuth(req: IncomingMessage): boolean {
@@ -1082,6 +1087,34 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
     }
 
     if (urlPath === '/v1/models' && req.method === 'GET') { requestCount++; res.writeHead(200, { ...JSON_HEADERS, 'Access-Control-Allow-Origin': corsOrigin }); res.end(MODELS_JSON); return; }
+
+    // [TokenSea] Auxiliary API routing — forward CC's non-messages API calls
+    // (bootstrap, grove, MCP, telemetry, etc.) to api.anthropic.com.
+    // This makes dario's traffic pattern match real CC exactly.
+    const auxResult = classifyAuxRequest(urlPath, req.method ?? '');
+    if (auxResult.action === 'forward') {
+      // Forward to api.anthropic.com with real OAuth auth
+      let auxToken: string;
+      if (pool) {
+        const auxAccount = pool.select();
+        if (!auxAccount) {
+          res.writeHead(503, JSON_HEADERS);
+          res.end(JSON.stringify({ error: 'No accounts available' }));
+          return;
+        }
+        auxToken = auxAccount.accessToken;
+      } else {
+        try {
+          auxToken = await getAccessToken();
+        } catch {
+          res.writeHead(503, JSON_HEADERS);
+          res.end(JSON.stringify({ error: 'Not authenticated' }));
+          return;
+        }
+      }
+      await forwardAuxRequest(req, res, auxToken, SECURITY_HEADERS, sidecarClient);
+      return;
+    }
 
     // Detect OpenAI-format requests
     const isOpenAI = urlPath === '/v1/chat/completions';
@@ -1250,6 +1283,11 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
 
       // Parse body once, apply OpenAI translation, model override, and sanitization
       let finalBody: Buffer | undefined = body.length > 0 ? body : undefined;
+      // CC-shaped body as a plain object for the SDK. Set inside the try block
+      // when the body is parsed and template-replay is applied. The SDK's
+      // buildRequest() serializes this internally — we don't need finalBody
+      // for the SDK path (only for passthrough raw fetch and body dump logging).
+      let ccBodyObject: Record<string, unknown> | undefined;
       let ccToolMap: Map<string, ToolMapping> | null = null;
       // requestModel / detectedClientForLog / preserveToolsEffective are
       // declared at the outer try-scope above so the catch block can
@@ -1430,6 +1468,8 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
             Object.assign(r, ccBody);
           }
           finalBody = Buffer.from(JSON.stringify(r));
+          // Store the body object for SDK-based requests
+          ccBodyObject = r;
         } catch { /* not JSON, send as-is */ }
       }
 
@@ -1538,19 +1578,23 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
         }
       }
 
-      const headers: Record<string, string> = {
-        ...staticHeaders,
+      // [TokenSea] Passthrough mode: build manual headers for raw fetch.
+      // CC-shaped mode: SDK handles all header generation, so we only need
+      // to build passthrough headers here.
+      const headers: Record<string, string> = passthrough ? {
+        ...passthroughHeaders(),
         'Authorization': `Bearer ${accessToken}`,
-        // [TokenSea] Real CC sends x-anthropic-billing-header as an HTTP header too,
-        // not just as a system prompt text block. Without this, the request is
-        // missing a header that Anthropic expects from real CC OAuth requests.
-        'x-anthropic-billing-header': billingValue,
         'x-claude-code-session-id': outboundSessionId,
-        'anthropic-version': passthrough ? (req.headers['anthropic-version'] as string || '2023-06-01') : '2023-06-01',
+        'anthropic-version': req.headers['anthropic-version'] as string || '2023-06-01',
         'anthropic-beta': beta,
         'x-client-request-id': randomUUID(),
-        // CC sends 600 on first request per session. With rotation, every request is "first"
         'x-stainless-timeout': '600',
+      } : {
+        // CC-shaped mode headers are built by the SDK via buildRequest().
+        // We only store metadata here for the 429 failover path.
+        'Authorization': `Bearer ${accessToken}`,
+        'x-claude-code-session-id': outboundSessionId,
+        'anthropic-beta': beta,
       };
 
       // Client-disconnect abort: if the client drops the connection before
@@ -1596,21 +1640,124 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
       let upstream!: Response;
       let peekedBody: string | null = null;
 
+      /**
+       * Outbound fetch helper — routes requests through the TLS sidecar
+       * when available (Bun runtime → OpenSSL fingerprint), otherwise
+       * falls back to direct fetch or SDK-based sendRequest.
+       *
+       * Passthrough mode: simple headers, raw fetch or sidecar fetch.
+       * CC-shaped mode: SDK buildRequest for headers, sidecar or sendRequest for transport.
+       */
+      const outboundFetch = async (overrideBeta?: string): Promise<Response> => {
+        const effectiveBeta = overrideBeta ?? beta;
+        if (sidecarClient?.ready) {
+          // Sidecar path — SDK generates headers, sidecar handles TLS
+          if (passthrough || !ccBodyObject) {
+            return sidecarClient.fetch(targetBase, {
+              method: req.method ?? 'POST',
+              headers: overrideBeta ? { ...headers, 'anthropic-beta': overrideBeta } : headers,
+              body: finalBody ? new Uint8Array(finalBody) : undefined,
+              signal: upstreamAbort.signal,
+            });
+          }
+          // CC-shaped: SDK buildRequest for correct header ordering
+          const sdkClient = upstreamClient.getClient(accessToken, outboundSessionId);
+          const { req: sdkReq, url: sdkUrl } = await sdkClient.buildRequest({
+            method: 'post',
+            path: '/v1/messages',
+            body: ccBodyObject,
+            headers: {
+              'anthropic-beta': effectiveBeta,
+              'x-client-request-id': randomUUID(),
+            },
+            signal: upstreamAbort.signal,
+            timeout: 600_000,
+          });
+          return sidecarClient.fetch(sdkUrl, {
+            method: sdkReq.method,
+            headers: headersToRecord(sdkReq.headers as Headers | [string, string][] | Record<string, string>),
+            body: sdkReq.body as BodyInit | undefined,
+            signal: upstreamAbort.signal,
+          });
+        }
+        // No sidecar — direct path
+        if (passthrough || !ccBodyObject) {
+          return fetch(targetBase, {
+            method: req.method ?? 'POST',
+            headers: overrideBeta ? { ...headers, 'anthropic-beta': overrideBeta } : headers,
+            body: finalBody ? new Uint8Array(finalBody) : undefined,
+            signal: upstreamAbort.signal,
+          });
+        }
+        return upstreamClient.sendRequest(accessToken, ccBodyObject!, {
+          sessionId: outboundSessionId,
+          anthropicBeta: effectiveBeta,
+          signal: upstreamAbort.signal,
+          timeout: 600_000,
+        });
+      };
+
+      // [TokenSea] Preflight request — real CC sends a small haiku request
+      // with structured-outputs beta before the main request. This makes
+      // dario's traffic pattern match CC's two-request pattern from the
+      // server's perspective. Only sent for CC-shaped (non-passthrough) mode.
+      // The preflight response is consumed and discarded; errors are logged
+      // but do not block the main request.
+      if (!passthrough && ccBodyObject) {
+        try {
+          const preflightBody: Record<string, unknown> = {
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 1,
+            messages: [{ role: 'user', content: 'ping' }],
+          };
+          let preflightResp: Response;
+          if (sidecarClient?.ready) {
+            // Sidecar path for preflight
+            const preflightSdkClient = upstreamClient.getClient(accessToken, outboundSessionId);
+            const { req: pReq, url: pUrl } = await preflightSdkClient.buildRequest({
+              method: 'post',
+              path: '/v1/messages',
+              body: preflightBody,
+              headers: {
+                'anthropic-beta': 'structured-outputs-2025-12-15',
+                'x-client-request-id': randomUUID(),
+              },
+              signal: AbortSignal.timeout(15_000),
+              timeout: 15_000,
+            });
+            preflightResp = await sidecarClient.fetch(pUrl, {
+              method: pReq.method,
+              headers: headersToRecord(pReq.headers as Headers | [string, string][] | Record<string, string>),
+              body: pReq.body as BodyInit | undefined,
+              signal: AbortSignal.timeout(15_000),
+            });
+          } else {
+            preflightResp = await upstreamClient.sendRequest(accessToken, preflightBody, {
+              sessionId: outboundSessionId,
+              anthropicBeta: 'structured-outputs-2025-12-15',
+              signal: AbortSignal.timeout(15_000),
+              timeout: 15_000,
+            });
+          }
+          // Drain the response body to free the connection
+          await preflightResp.text().catch(() => {});
+          if (verbose) {
+            console.log(`[dario] #${requestCount} preflight: ${preflightResp.status}`);
+          }
+        } catch (preflightErr: any) {
+          // Preflight failure is non-fatal — log and continue
+          if (verbose) {
+            console.log(`[dario] #${requestCount} preflight error (non-fatal): ${preflightErr?.message ?? preflightErr}`);
+          }
+        }
+      }
+
       // Inside-request 429 failover loop (v3.8.0). On a 429, pool mode tries
       // the next-best account before surfacing the error to the client.
       // Bounded to pool.size iterations; breaks immediately on any non-429.
       dispatchLoop: while (true) {
-        // Reorder outbound headers to match CC's captured header sequence
-        // when the live template recorded one. No-op on bundled-only installs.
-        // Skipped in passthrough mode — passthrough means "don't shape the
-        // request to look like CC," and reordering is a form of shaping.
-        const outboundHeaders = passthrough ? headers : orderHeadersForOutbound(headers);
-        upstream = await fetch(targetBase, {
-          method: req.method ?? 'POST',
-          headers: outboundHeaders,
-          body: finalBody ? new Uint8Array(finalBody) : undefined,
-          signal: upstreamAbort.signal,
-        });
+        // Route through sidecar (OpenSSL TLS) when available, else direct
+        upstream = await outboundFetch();
 
         // Pool mode: capture rate-limit snapshot from the response. parseRateLimits
         // returns status='rejected' on 429, which makes the next `select()` call
@@ -1671,13 +1818,7 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
           for (const f of betaRejectedFlags) { if (!set.has(f)) { set.add(f); newFlags.push(f); } }
           if (verbose && newFlags.length > 0) console.log(`[dario] #${requestCount} anthropic-beta rejected (${newFlags.join(',')}) — retrying without (cached for session)`);
           const reducedBeta = beta.split(',').filter((t) => t.length > 0 && !set!.has(t)).join(',');
-          const retryHeaders = { ...headers, 'anthropic-beta': reducedBeta };
-          const retry = await fetch(targetBase, {
-            method: req.method ?? 'POST',
-            headers: passthrough ? retryHeaders : orderHeadersForOutbound(retryHeaders),
-            body: finalBody ? new Uint8Array(finalBody) : undefined,
-            signal: upstreamAbort.signal,
-          });
+          const retry = await outboundFetch(reducedBeta);
           upstream = retry;
           peekedBody = null;
           if (pool && poolAccount) {
@@ -1702,13 +1843,7 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
           // whitespace/structure if betaBase ever gains non-context-1m tokens
           // at the same position — keep the two paths funneled through one filter.
           const reducedBeta = beta.split(',').filter((t) => t !== 'context-1m-2025-08-07').join(',');
-          const retryHeaders = { ...headers, 'anthropic-beta': reducedBeta };
-          const retry = await fetch(targetBase, {
-            method: req.method ?? 'POST',
-            headers: passthrough ? retryHeaders : orderHeadersForOutbound(retryHeaders),
-            body: finalBody ? new Uint8Array(finalBody) : undefined,
-            signal: upstreamAbort.signal,
-          });
+          const retry = await outboundFetch(reducedBeta);
           // Use the retry response from here on — peeked body is now stale
           upstream = retry;
           peekedBody = null;
@@ -1729,8 +1864,14 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
               triedAliases.add(nextAccount.alias);
               poolAccount = nextAccount;
               accessToken = nextAccount.accessToken;
+              // Update metadata for 429 failover. For passthrough mode,
+              // headers mutations are used by the raw fetch() call. For
+              // CC-shaped mode, sendRequest() picks up accessToken and
+              // outboundSessionId directly — the headers object is unused.
               headers['Authorization'] = `Bearer ${accessToken}`;
               headers['x-claude-code-session-id'] = nextAccount.identity.sessionId;
+              headers['anthropic-beta'] = beta;
+              outboundSessionId = nextAccount.identity.sessionId;
               pool.rebindSticky(stickyKey, nextAccount.alias);
               peekedBody = null;
               continue dispatchLoop;
@@ -1789,6 +1930,8 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
             accessToken = nextAccount.accessToken;
             headers['Authorization'] = `Bearer ${accessToken}`;
             headers['x-claude-code-session-id'] = nextAccount.identity.sessionId;
+            headers['anthropic-beta'] = beta;
+            outboundSessionId = nextAccount.identity.sessionId;
             pool.rebindSticky(stickyKey, nextAccount.alias);
             continue dispatchLoop;
           }
@@ -2218,9 +2361,9 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
           cliVersion = freshVersion;
           console.log(`[dario] CC version updated from live capture: v${cliVersion}`);
         }
-        // Rebuild static headers from the fresh template's header_values
-        staticHeaders = rebuildStaticHeaders();
-        console.log(`[dario] Static headers rebuilt from live template (user-agent: ${staticHeaders['user-agent']})`);
+        // Update the SDK client with the fresh version (clears cached clients)
+        upstreamClient.updateCliVersion(cliVersion);
+        console.log(`[dario] Upstream client updated from live template (user-agent: claude-cli/${cliVersion} (external, sdk-cli))`);
       }
     });
   } else {
@@ -2291,6 +2434,7 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
     // clearInterval(presenceInterval); // [TokenSea] heartbeat disabled
     clearInterval(refreshInterval);
     if (logFileStream) logFileStream.end();
+    if (sidecarClient) sidecarClient.close();
     server.close(() => process.exit(0));
     // Force exit after 5s if connections don't close
     setTimeout(() => process.exit(0), 5000).unref();

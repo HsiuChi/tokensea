@@ -17,13 +17,19 @@ FROM oven/bun:1
 
 WORKDIR /app
 
+# Install Node.js v24.x — TLS sidecar needs it for OpenSSL fingerprint
+# that matches real Claude Code (which runs on Node.js v24).
+# Different Node major versions have different JA3 fingerprints.
+# Order: ca-certificates → curl → NodeSource setup → nodejs
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install Claude Code for live fingerprint capture.
 # This provides a base version; the entrypoint script updates it at startup
 # to ensure the latest CC shape (tools, system prompt, headers).
 RUN bun add -g @anthropic-ai/claude-code || true
-
-# Install curl for healthcheck
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
 # Copy built artifacts from builder
 COPY --from=builder /app/dist/ ./dist/
