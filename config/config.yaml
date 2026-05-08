@@ -32,6 +32,18 @@ claude-api-key:
   #   cloak:
   #     mode: "never"
 
+# OpenAI/Codex API keys — each codex-dario node is an upstream entry
+# cloak.mode: "never" — codex-dario handles wire-fidelity, CPA just routes
+codex-api-key:
+  - api-key: "ts-codex-internal-1"
+    base-url: "http://codex-dario-1:3457"
+    cloak:
+      mode: "never"
+  # - api-key: "ts-codex-internal-2"
+  #   base-url: "http://codex-dario-2:3457"
+  #   cloak:
+  #     mode: "never"
+
 # Routing — session-affinity keeps each user's requests on the same seat
 # This prevents multiple sessions from hitting the same OAuth token simultaneously
 routing:

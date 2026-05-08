@@ -1,0 +1,33 @@
+{
+  "_version": "0.128.0",
+  "_source": "bundled",
+  "_captured": "2026-05-07T00:00:00.000Z",
+  "_schemaVersion": 4,
+  "header_order": [
+    "Authorization",
+    "User-Agent",
+    "Content-Type",
+    "Accept",
+    "Originator",
+    "ChatGPT-Account-Id",
+    "OpenAI-Beta"
+  ],
+  "header_values": {
+    "user-agent": "codex_cli_rs/0.128.0 (MacOS 15.5; aarch64) terminal/1.0",
+    "originator": "codex_cli_rs",
+    "accept": "text/event-stream"
+  },
+  "body_field_order": [
+    "model",
+    "input",
+    "instructions",
+    "tools",
+    "stream",
+    "session_id"
+  ],
+  "anthropic_beta": "",
+  "system_prompt": "",
+  "tools": [],
+  "agent_identity": "codex_cli_rs",
+  "cc_entrypoint": "codex_cli_rs"
+}

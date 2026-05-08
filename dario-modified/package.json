@@ -27,6 +27,8 @@
     "prepublishOnly": "npm run build",
     "start": "node dist/cli.js",
     "dev": "tsx src/cli.ts",
+    "capture:h2": "node scripts/h2-capture-server.mjs",
+    "capture:h2:local": "node scripts/run-local-h2-capture.mjs",
     "e2e": "node test/e2e.mjs",
     "stress": "node test/stress.mjs",
     "compat": "node test/compat.mjs",

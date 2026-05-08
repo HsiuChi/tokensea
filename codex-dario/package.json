@@ -1,0 +1,23 @@
+{
+  "name": "@tokensea/codex-dario",
+  "version": "1.0.0",
+  "description": "Wire-fidelity proxy for OpenAI Codex subscriptions",
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "codex-dario": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc && cp src/codex-template-data.json dist/",
+    "start": "bun run dist/cli.js proxy",
+    "dev": "tsx src/cli.ts proxy"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}
