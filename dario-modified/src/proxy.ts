@@ -15,7 +15,7 @@ import { getOpenAIBackend, isOpenAIModel, forwardToOpenAI, type BackendCredentia
 import { RequestQueue, QueueFullError, QueueTimeoutError, DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_QUEUED, DEFAULT_QUEUE_TIMEOUT_MS } from './request-queue.js';
 import { redactSecrets } from './redact.js';
 import { UpstreamClient } from './upstream-client.js';
-import { headersToRecord } from './shim/tls-sidecar-client.js';
+import { TlsSidecarClient, headersToRecord } from './shim/tls-sidecar-client.js';
 import { classifyAuxRequest, forwardAuxRequest, type AuxResult } from './aux-proxy.js';
 
 const ANTHROPIC_API = 'https://api.anthropic.com';
@@ -800,7 +800,16 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
   // sidecar was designed for when CC used OpenSSL, but CC now uses Bun/BoringSSL,
   // so the sidecar would produce a *different* fingerprint (52-cipher OpenSSL vs
   // CC's 17-cipher BoringSSL). Disabled — direct Bun fetch is correct.
-  const sidecarClient = null;
+  const useSidecar = false;
+  const sidecarClient = useSidecar && runtimeFp.runtime === 'bun' ? new TlsSidecarClient() : null;
+  if (sidecarClient) {
+    const started = await sidecarClient.start();
+    if (started) {
+      console.log('  TLS sidecar: active (Node.js OpenSSL fingerprint)');
+    } else {
+      console.warn('[dario] TLS sidecar: failed to start — outbound TLS will use Bun (BoringSSL)');
+    }
+  }
 
   // Passthrough mode: minimal headers only (no SDK shaping)
   function passthroughHeaders(): Record<string, string> {
