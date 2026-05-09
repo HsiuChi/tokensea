@@ -34,7 +34,11 @@
     "compat": "node test/compat.mjs",
     "lint:pkg": "node scripts/check-package-json.mjs",
     "drift:sdk": "node scripts/check-sdk-drift.mjs",
-    "fix:pkg": "node -e \"const fs=require('fs');fs.writeFileSync('package.json',JSON.stringify(JSON.parse(fs.readFileSync('package.json','utf-8')),null,2)+'\\n')\""
+    "fix:pkg": "node -e \"const fs=require('fs');fs.writeFileSync('package.json',JSON.stringify(JSON.parse(fs.readFileSync('package.json','utf-8')),null,2)+'\\n')\"",
+    "fingerprint:capture": "bash scripts/fingerprint-capture.sh",
+    "fingerprint:verify": "bash scripts/fingerprint-verify.sh",
+    "shim:test": "bash scripts/shim-test.sh",
+    "predeploy:verify": "bash scripts/predeploy-verify.sh"
   },
   "keywords": [
     "llm",

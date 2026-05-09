@@ -25,6 +25,7 @@ import { detectCCOAuthConfig } from './cc-oauth-detect.js';
 import { loadCredentials } from './oauth.js';
 import { openBrowser } from './open-browser.js';
 import { redactSecrets } from './redact.js';
+import { shimFetch } from './shim-fetch.js';
 
 const DARIO_DIR = join(homedir(), '.dario');
 const ACCOUNTS_DIR = join(DARIO_DIR, 'accounts');
@@ -158,7 +159,7 @@ export async function refreshAccountToken(creds: AccountCredentials): Promise<Ac
 
 async function doRefreshAccountToken(creds: AccountCredentials): Promise<AccountCredentials> {
   const cfg = await detectCCOAuthConfig();
-  const res = await fetch(cfg.tokenUrl, {
+  const res = await shimFetch(cfg.tokenUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -269,7 +270,7 @@ export async function addAccountViaOAuth(alias: string): Promise<AccountCredenti
         server.close();
 
         // Exchange code for tokens
-        const tokenRes = await fetch(cfg.tokenUrl, {
+        const tokenRes = await shimFetch(cfg.tokenUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

@@ -10,6 +10,7 @@ import { buildCCRequest, reverseMapResponse, createStreamingReverseMapper, CC_TE
 import { describeTemplate, detectDrift, checkCCCompat } from './live-fingerprint.js';
 import { AccountPool, computeStickyKey, parseRateLimits, modelFamily, type PoolAccount } from './pool.js';
 import { Analytics, billingBucketFromClaim } from './analytics.js';
+import { checkTlsFingerprintDrift } from './tls-fingerprint.js';
 import { loadAllAccounts, loadAccount, refreshAccountToken } from './accounts.js';
 import { getOpenAIBackend, isOpenAIModel, forwardToOpenAI, type BackendCredentials } from './openai-backend.js';
 import { RequestQueue, QueueFullError, QueueTimeoutError, DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_QUEUED, DEFAULT_QUEUE_TIMEOUT_MS } from './request-queue.js';
@@ -19,6 +20,7 @@ import { TlsSidecarClient, headersToRecord } from './shim/tls-sidecar-client.js'
 import { classifyAuxRequest, forwardAuxRequest, type AuxResult } from './aux-proxy.js';
 
 const ANTHROPIC_API = 'https://api.anthropic.com';
+const TLS_SHIM_URL = process.env.DARIO_TLS_SHIM !== '0' ? 'http://127.0.0.1:3443' : '';
 const DEFAULT_PORT = 3456;
 const MAX_BODY_BYTES = 10 * 1024 * 1024; // 10 MB — generous for large prompts, prevents abuse
 const UPSTREAM_TIMEOUT_MS = 300_000; // 5 min — matches Anthropic SDK default
@@ -964,9 +966,13 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
         : s.status === 'expiring' ? 'valid'
         : s.status === 'expired' ? 'expired'
         : 'none';
-      const overallStatus = oauthStatus === 'valid' ? 'healthy'
+      const tlsDrift = await checkTlsFingerprintDrift();
+      let overallStatus = oauthStatus === 'valid' ? 'healthy'
         : oauthStatus === 'expired' ? 'degraded'
         : 'down';
+      if (overallStatus === 'healthy' && !tlsDrift.aligned) {
+        overallStatus = 'degraded';
+      }
       const templateAge = CC_TEMPLATE._captured
         ? Math.round((Date.now() - new Date(CC_TEMPLATE._captured).getTime()) / 3600000)
         : -1;
@@ -980,6 +986,7 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
         template_version: CC_TEMPLATE._version || '',
         template_age_hours: templateAge,
         runtime: runtimeFp.status,
+        tls_fingerprint: tlsDrift,
         concurrent_requests: activeConcurrent,
         uptime_seconds: uptimeSeconds,
       }));
@@ -995,6 +1002,7 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
         ? Math.round((Date.now() - new Date(CC_TEMPLATE._captured).getTime()) / 3600000)
         : -1;
       const driftResult = detectDrift(CC_TEMPLATE);
+      const tlsDrift = await checkTlsFingerprintDrift();
       const accountType = process.env.DARIO_ACCOUNT_TYPE || 'team';
       const accountId = process.env.DARIO_ACCOUNT_ID || '';
       const metrics = [
@@ -1019,6 +1027,9 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
         `# HELP dario_template_drift Whether the template version differs from installed CC version (0=match, 1=drift)`,
         `# TYPE dario_template_drift gauge`,
         `dario_template_drift{account_id="${accountId}",account_type="${accountType}"} ${driftResult.drifted ? 1 : 0}`,
+        `# HELP dario_tls_fingerprint_aligned Whether CC and shim TLS fingerprints match (1=aligned, 0=drift)`,
+        `# TYPE dario_tls_fingerprint_aligned gauge`,
+        `dario_tls_fingerprint_aligned{account_id="${accountId}",account_type="${accountType}"} ${tlsDrift.aligned ? 1 : 0}`,
       ].join('\n') + '\n';
       res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4' });
       res.end(metrics);
@@ -1683,9 +1694,12 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
             signal: upstreamAbort.signal,
           });
         }
-        // No sidecar — direct path
+        // No sidecar — route through TLS shim if available, else direct
+        const shimTargetBase = TLS_SHIM_URL
+          ? targetBase.replace(/^https:\/\/[^/]+/, TLS_SHIM_URL)
+          : targetBase;
         if (passthrough || !ccBodyObject) {
-          return fetch(targetBase, {
+          return fetch(shimTargetBase, {
             method: req.method ?? 'POST',
             headers: overrideBeta ? { ...headers, 'anthropic-beta': overrideBeta } : headers,
             body: finalBody ? new Uint8Array(finalBody) : undefined,

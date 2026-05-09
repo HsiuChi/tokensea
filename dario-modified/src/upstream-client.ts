@@ -4,14 +4,22 @@
  *
  * The SDK automatically handles:
  *  - x-stainless-* platform headers (arch, lang, os, package-version, retry-count, runtime, runtime-version)
- *  - Header ordering (matches real Claude Code since it uses the same SDK)
  *  - anthropic-dangerous-direct-browser-access (via dangerouslyAllowBrowser: true)
  *  - Authorization: Bearer (via authToken)
  *  - ?beta=true query param (via defaultQuery)
  *
+ * After buildRequest(), headers are reordered via orderHeadersForOutbound()
+ * to match CC's captured wire order (the SDK's internal order differs from
+ * CC's actual wire order).
+ *
+ * TLS: When DARIO_TLS_SHIM is set (default), outbound requests route through
+ * the Go utls shim at 127.0.0.1:3443, which produces a ClientHello matching
+ * CC's exact TLS fingerprint (no ECH/65037 extension). Without the shim,
+ * Bun's native fetch adds 65037, which diverges from CC.
+ *
  * dario adds CC-specific headers on top via defaultHeaders / per-request headers:
  *  - user-agent override (claude-cli/... format)
- *  - X-Claude-Code-Session-Id (via defaultHeaders — placed after User-Agent like real CC)
+ *  - X-Claude-Code-Session-Id (via defaultHeaders)
  *  - x-app: cli (via defaultHeaders)
  *  - x-client-request-id (per-request, via options.headers)
  *  - anthropic-beta (per-request, via options.headers)
@@ -19,6 +27,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { randomUUID } from 'node:crypto';
+import { orderHeadersForOutbound } from './cc-template.js';
 
 export interface UpstreamClientOptions {
   cliVersion: string;
@@ -28,6 +37,8 @@ export interface UpstreamClientOptions {
   stainlessArch?: string;
   /** Override x-stainless-runtime-version (default: 'v24.3.0' to match CC) */
   stainlessRuntimeVersion?: string;
+  /** TLS shim URL (e.g. 'http://127.0.0.1:3443'). Set to '' to disable. */
+  tlsShimUrl?: string;
 }
 
 export interface SendRequestOptions {
@@ -37,27 +48,28 @@ export interface SendRequestOptions {
   timeout?: number;
 }
 
+/** Rewrite an https:// URL to go through the local TLS shim. */
+function rewriteForShim(originalUrl: string, shimUrl: string): string {
+  // Replace scheme + host with shim, keep path and query
+  return originalUrl.replace(/^https:\/\/[^/]+/, shimUrl);
+}
+
 export class UpstreamClient {
-  // Cache key: accessToken:sessionId — sessionId is in defaultHeaders so
-  // a new client is needed when the session changes (e.g., rotation, failover)
   private clients: Map<string, Anthropic> = new Map();
   private cliVersion: string;
   private readonly stainlessOS: string;
   private readonly stainlessArch: string;
   private readonly stainlessRuntimeVersion: string;
+  private readonly tlsShimUrl: string;
 
   constructor(opts: UpstreamClientOptions) {
     this.cliVersion = opts.cliVersion;
     this.stainlessOS = opts.stainlessOS ?? 'Linux';
     this.stainlessArch = opts.stainlessArch ?? 'x64';
     this.stainlessRuntimeVersion = opts.stainlessRuntimeVersion ?? 'v24.3.0';
+    this.tlsShimUrl = opts.tlsShimUrl ?? (process.env.DARIO_TLS_SHIM !== '0' ? 'http://127.0.0.1:3443' : '');
   }
 
-  /**
-   * Get or create an SDK client for the given access token + session.
-   * Both token and sessionId are in defaultHeaders, so the cache key
-   * includes both. A session change (rotation/failover) creates a new client.
-   */
   getClient(accessToken: string, sessionId: string): Anthropic {
     const cacheKey = `${accessToken}:${sessionId}`;
     if (!this.clients.has(cacheKey)) {
@@ -67,8 +79,6 @@ export class UpstreamClient {
         defaultQuery: { beta: 'true' },
         defaultHeaders: {
           'User-Agent': `claude-cli/${this.cliVersion} (external, sdk-cli)`,
-          // X-Claude-Code-Session-Id goes in defaultHeaders so it appears
-          // right after User-Agent (matching real CC's header wire order).
           'X-Claude-Code-Session-Id': sessionId,
           'X-Stainless-OS': this.stainlessOS,
           'X-Stainless-Arch': this.stainlessArch,
@@ -76,20 +86,13 @@ export class UpstreamClient {
           'X-Stainless-Runtime-Version': this.stainlessRuntimeVersion,
           'x-app': 'cli',
         },
-        maxRetries: 0, // dario handles retries itself
+        maxRetries: 0,
       });
       this.clients.set(cacheKey, client);
     }
     return this.clients.get(cacheKey)!;
   }
 
-  /**
-   * Build a request using the SDK's header generation logic, then send
-   * with our own fetch() to get a raw Response for SSE streaming.
-   *
-   * The SDK's buildRequest() assembles headers in the same order as
-   * real Claude Code (same SDK version = same header wire format).
-   */
   async sendRequest(
     accessToken: string,
     body: Record<string, unknown>,
@@ -97,7 +100,6 @@ export class UpstreamClient {
   ): Promise<Response> {
     const client = this.getClient(accessToken, options.sessionId);
 
-    // Per-request headers that change every call
     const perRequestHeaders: Record<string, string> = {
       'x-client-request-id': randomUUID(),
     };
@@ -105,7 +107,6 @@ export class UpstreamClient {
       perRequestHeaders['anthropic-beta'] = options.anthropicBeta;
     }
 
-    // Use SDK's buildRequest to get the full request with correct headers
     const { req, url } = await client.buildRequest({
       method: 'post',
       path: '/v1/messages',
@@ -115,19 +116,31 @@ export class UpstreamClient {
       timeout: options.timeout,
     });
 
-    // Send with our own fetch to preserve raw SSE streaming
-    return fetch(url, {
+    // Reorder headers to match CC's captured wire order
+    const hdrRecord: Record<string, string> = req.headers instanceof Headers
+      ? Object.fromEntries(req.headers.entries())
+      : Object.keys(req.headers as Record<string, string>).reduce((acc: Record<string, string>, k: string) => {
+          const v = (req.headers as Record<string, string>)[k];
+          acc[k] = v;
+          return acc;
+        }, {});
+    const orderedHeaders = orderHeadersForOutbound(hdrRecord);
+
+    // Route through TLS shim if configured. The shim uses Go utls to produce
+    // a ClientHello matching CC's fingerprint (no ECH/65037 extension).
+    // Without the shim, Bun's native fetch adds 65037, diverging from CC.
+    const fetchUrl = this.tlsShimUrl
+      ? rewriteForShim(url.toString(), this.tlsShimUrl)
+      : url;
+
+    return fetch(fetchUrl, {
       method: req.method,
-      headers: req.headers,
+      headers: orderedHeaders,
       body: req.body as BodyInit | undefined,
       signal: options.signal,
     });
   }
 
-  /**
-   * Update the CLI version (e.g., after live fingerprint refresh).
-   * Clears cached clients since defaultHeaders depend on cliVersion.
-   */
   updateCliVersion(version: string): void {
     if (this.cliVersion !== version) {
       this.cliVersion = version;

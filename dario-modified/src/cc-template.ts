@@ -122,7 +122,7 @@ export function orderHeadersForOutbound(
   headers: Record<string, string>,
   overrideHeaderOrder?: string[] | undefined,
 ): Record<string, string> | Array<[string, string]> {
-  const order = overrideHeaderOrder !== undefined ? overrideHeaderOrder : TEMPLATE.header_order;
+  const order = overrideHeaderOrder !== undefined ? overrideHeaderOrder : CC_TEMPLATE.header_order;
   if (!Array.isArray(order) || order.length === 0) {
     return headers;
   }
@@ -182,7 +182,7 @@ export function orderBodyForOutbound(
   body: Record<string, unknown>,
   overrideOrder?: string[] | undefined,
 ): Record<string, unknown> {
-  const order = overrideOrder !== undefined ? overrideOrder : TEMPLATE.body_field_order;
+  const order = overrideOrder !== undefined ? overrideOrder : CC_TEMPLATE.body_field_order;;
   if (!Array.isArray(order) || order.length === 0) {
     return body;
   }
@@ -1251,11 +1251,9 @@ export function buildCCRequest(
     } else {
       ccRequest.tools = currentTools;
     }
-  } else if (effectiveMergeTools) {
-    // Operator opted into merge but the client sent no tools. Still
-    // emit the CC base array — that preserves the fingerprint shape
-    // (zero-tools requests are themselves a divergence from CC's
-    // wire footprint).
+  } else {
+    // No client tools — still emit CC's canonical set. Real CC always
+    // includes its 26 tools; omitting them is a fingerprinting gap.
     ccRequest.tools = currentTools;
   }
 

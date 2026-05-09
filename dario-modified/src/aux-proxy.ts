@@ -18,6 +18,7 @@ import { type IncomingMessage, type ServerResponse } from 'node:http';
 import type { TlsSidecarClient } from './shim/tls-sidecar-client.js';
 
 const ANTHROPIC_API = 'https://api.anthropic.com';
+const TLS_SHIM_URL = process.env.DARIO_TLS_SHIM !== '0' ? 'http://127.0.0.1:3443' : '';
 
 // ---------------------------------------------------------------------------
 // Endpoint classification
@@ -158,14 +159,17 @@ export async function forwardAuxRequest(
   }
 
   try {
+    const shimTargetUrl = TLS_SHIM_URL
+      ? targetUrl.replace(/^https:\/\/[^/]+/, TLS_SHIM_URL)
+      : targetUrl;
     const upstream = sidecarClient?.ready
-      ? await sidecarClient.fetch(targetUrl, {
+      ? await sidecarClient.fetch(shimTargetUrl, {
           method: req.method,
           headers,
           body: body ? new Uint8Array(body) : undefined,
           signal: AbortSignal.timeout(30_000),
         })
-      : await fetch(targetUrl, {
+      : await fetch(shimTargetUrl, {
           method: req.method,
           headers,
           body: body ? new Uint8Array(body) : undefined,

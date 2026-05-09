@@ -13,6 +13,7 @@ import { dirname, join } from 'node:path';
 import { homedir, platform } from 'node:os';
 import { detectCCOAuthConfig } from './cc-oauth-detect.js';
 import { redactSecrets } from './redact.js';
+import { shimFetch } from './shim-fetch.js';
 
 // Manual-flow redirect URI. Anthropic's authorize endpoint special-cases
 // this value (also baked into CC as MANUAL_REDIRECT_URL) to render the
@@ -387,7 +388,7 @@ export async function startAutoOAuthFlow(): Promise<OAuthTokens> {
  */
 async function exchangeCodeWithRedirect(code: string, codeVerifier: string, state: string, port: number): Promise<OAuthTokens> {
   const cfg = await getOAuthConfig();
-  const res = await fetch(cfg.tokenUrl, {
+  const res = await shimFetch(cfg.tokenUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -544,7 +545,7 @@ export async function startManualOAuthFlow(): Promise<OAuthTokens> {
 
 async function exchangeCodeManual(code: string, codeVerifier: string, state: string): Promise<OAuthTokens> {
   const cfg = await getOAuthConfig();
-  const res = await fetch(cfg.tokenUrl, {
+  const res = await shimFetch(cfg.tokenUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -621,7 +622,7 @@ async function doRefreshTokens(): Promise<OAuthTokens> {
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
 
-    const res = await fetch(cfg.tokenUrl, {
+    const res = await shimFetch(cfg.tokenUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
