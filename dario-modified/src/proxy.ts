@@ -389,6 +389,7 @@ interface ProxyOptions {
   verboseBodies?: boolean; // Dump redacted request bodies on every request (dario#40 -vv / DARIO_LOG_BODIES=1)
   model?: string;  // Override model in all requests
   passthrough?: boolean;  // Thin proxy — OAuth swap only, no injection
+  ccPassthrough?: boolean;  // Auto-detect CC clients and forward their requests as-is (token swap only)
   preserveTools?: boolean;  // Keep client tool schemas (for agents with custom tools)
   hybridTools?: boolean;    // Remap to CC tools but inject request-context fields on return (#33)
   /**
@@ -598,6 +599,7 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
   const host = opts.host ?? process.env.DARIO_HOST ?? DEFAULT_HOST;
   const verbose = opts.verbose ?? false;
   const passthrough = opts.passthrough ?? false;
+  const ccPassthrough = opts.ccPassthrough ?? (process.env.DARIO_CC_PASSTHROUGH === '1');
 
   // TLS-fingerprint axis (v3.23, direction #3). Proxy mode terminates TLS
   // to api.anthropic.com from this process; if we're not on Bun, the
@@ -644,6 +646,9 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
   );
   if (passthroughBetas.size > 0) {
     console.log(`  Beta passthrough: ${[...passthroughBetas].sort().join(', ')} (always forwarded; per-account rejection cache still applies)`);
+  }
+  if (ccPassthrough) {
+    console.log('  CC passthrough: auto-detected claude-cli clients forwarded as-is (token swap only)');
   }
 
   // Tool-routing mode mutex. preserve / hybrid / merge each shape the
@@ -1143,6 +1148,14 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
     if (!targetBase) { res.writeHead(403, JSON_HEADERS); res.end(ERR_FORBIDDEN); return; }
     if (req.method !== 'POST') { res.writeHead(405, JSON_HEADERS); res.end(ERR_METHOD); return; }
 
+    // CC client passthrough: detect real claude-cli clients by user-agent.
+    // When ccPassthrough is enabled and the client is real CC, skip template
+    // replay and forward the request as-is (token swap only). CC's own
+    // requests already match the expected fingerprint — rebuilding them
+    // introduces unnecessary differences.
+    const clientUA = req.headers['user-agent'] as string || '';
+    const isCCClient = ccPassthrough && /\bclaude-cli\//.test(clientUA);
+
     // Proxy to Anthropic (with concurrency control). The bounded queue
     // replaces the v3.30.x-and-earlier unbounded semaphore — dario#80. A
     // queue-full condition returns an explicit 429 with a `"queue-full"`
@@ -1352,8 +1365,21 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
           const result = isOpenAI ? openaiToAnthropic(parsed, modelOverride) : (modelOverride ? { ...parsed, model: modelOverride } : parsed);
           const r = result as Record<string, unknown>;
           requestModel = (r.model as string || '').toLowerCase();
-          // In passthrough mode, skip all Claude-specific injection — OAuth swap only
-          if (!passthrough) {
+          // CC passthrough: real CC client detected — forward request as-is
+          // (token swap only). CC's own request body is already the correct
+          // fingerprint; rebuilding it via buildCCRequest introduces
+          // differences (thinking key order, metadata field order, haiku
+          // output_config loss, etc.).
+          if (isCCClient) {
+            // Preserve CC's own billing header from the system prompt
+            const systemBlocks = r.system as Array<{ text?: string }> | undefined;
+            if (Array.isArray(systemBlocks) && systemBlocks[0]?.text?.startsWith('x-anthropic-billing-header:')) {
+              billingValue = systemBlocks[0].text.replace('x-anthropic-billing-header: ', '');
+            }
+            // Keep original body as-is; ccBodyObject stays undefined
+            // so outboundFetch uses raw fetch path
+            finalBody = body;
+          } else if (!passthrough) {
             // ── Template replay: replace the entire request with a CC template ──
             // Instead of transforming signals one by one, we build a new request
             // from CC's exact template and inject only the conversation content.
@@ -1498,7 +1524,7 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
         : { device: identity.deviceId.slice(0, 8) + '...', uuid: identity.accountUuid || '(empty)', session: (preBodySessionId || SESSION_ID).slice(0, 8) + '...' };
       const tsLogClientUA = req.headers['user-agent'] as string || '';
       const tsLogClientVer = tsLogClientUA.match(/claude-cli\/([\d.]+)/)?.[1] || '';
-      console.log(`[dario] #${requestCount} req model=${requestModel} cc_template=${CC_TEMPLATE._version || '?'} cc_client=${tsLogClientVer || 'n/a'} device=${tsLogIdentity.device} uuid=${tsLogIdentity.uuid} session=${tsLogIdentity.session} concurrent=${activeConcurrent}`);
+      console.log(`[dario] #${requestCount} req model=${requestModel} cc_template=${CC_TEMPLATE._version || '?'} cc_client=${tsLogClientVer || 'n/a'} cc_passthrough=${isCCClient} device=${tsLogIdentity.device} uuid=${tsLogIdentity.uuid} session=${tsLogIdentity.session} concurrent=${activeConcurrent}`);
 
       // Body dump — -vv / DARIO_LOG_BODIES=1. Runs on the outbound
       // body after the template build so operators see what actually
@@ -1518,8 +1544,8 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
       // Beta headers
       const clientBeta = req.headers['anthropic-beta'] as string | undefined;
       let beta: string;
-      if (passthrough) {
-        // Passthrough: only add oauth beta, forward client betas as-is
+      if (isCCClient || passthrough) {
+        // CC passthrough / passthrough: only add oauth beta, forward client betas as-is
         beta = 'oauth-2025-04-20';
         if (clientBeta) beta += ',' + clientBeta;
       } else {
@@ -1592,10 +1618,29 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
         }
       }
 
-      // [TokenSea] Passthrough mode: build manual headers for raw fetch.
-      // CC-shaped mode: SDK handles all header generation, so we only need
-      // to build passthrough headers here.
-      const headers: Record<string, string> = passthrough ? {
+      // [TokenSea] Headers for outbound request.
+      // CC passthrough: preserve CC's original identifying headers, swap auth only.
+      // Passthrough: minimal headers for raw fetch.
+      // CC-shaped: SDK handles all header generation, so we only store metadata.
+      const headers: Record<string, string> = isCCClient ? {
+        ...passthroughHeaders(),
+        'Authorization': `Bearer ${accessToken}`,
+        'x-claude-code-session-id': outboundSessionId,
+        'anthropic-version': req.headers['anthropic-version'] as string || '2023-06-01',
+        'anthropic-beta': beta,
+        'x-client-request-id': randomUUID(),
+        'x-stainless-timeout': '600',
+        // Forward CC's original fingerprint headers
+        'user-agent': clientUA,
+        'x-stainless-arch': req.headers['x-stainless-arch'] as string || 'x64',
+        'x-stainless-lang': req.headers['x-stainless-lang'] as string || 'js',
+        'x-stainless-os': req.headers['x-stainless-os'] as string || 'Linux',
+        'x-stainless-package-version': req.headers['x-stainless-package-version'] as string || '0.93.0',
+        'x-stainless-retry-count': req.headers['x-stainless-retry-count'] as string || '0',
+        'x-stainless-runtime': req.headers['x-stainless-runtime'] as string || 'node',
+        'x-stainless-runtime-version': req.headers['x-stainless-runtime-version'] as string || 'v24.3.0',
+        'x-app': req.headers['x-app'] as string || 'cli',
+      } : passthrough ? {
         ...passthroughHeaders(),
         'Authorization': `Bearer ${accessToken}`,
         'x-claude-code-session-id': outboundSessionId,

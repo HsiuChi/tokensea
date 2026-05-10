@@ -1200,8 +1200,10 @@ export function buildCCRequest(
   }
 
   // ── Build the CC request from template ──
-  // Key order matches CC v2.1.104 exactly:
-  // model, messages, system, tools, metadata, max_tokens, thinking, context_management, output_config, stream
+  // Key order matches CC v2.1.138 live capture:
+  // sonnet: model, messages, system, tools, metadata, max_tokens, thinking, context_management, stream
+  // opus:   model, messages, system, tools, metadata, max_tokens, thinking, context_management, output_config, stream
+  // haiku:  model, messages, system, tools, metadata, max_tokens, temperature, output_config, stream
   //
   // System prompt structure (3 blocks, matching real CC):
   //   [0] billing tag (no cache)
@@ -1270,22 +1272,36 @@ export function buildCCRequest(
     }),
   };
 
-  // max_tokens: opus defaults to 64000, others to 32000
-  const defaultMaxTokens = model.toLowerCase().includes('opus') ? OPUS_MAX_TOKENS : DEFAULT_MAX_TOKENS;
+  // max_tokens & model-specific fields
+  // Based on CC v2.1.138 live capture (probe on lisa):
+  //   opus 4.7: thinking=adaptive, output_config={effort:"xhigh"}, max_tokens=64000
+  //   opus 4.6: thinking=adaptive, output_config={effort:"high"}, max_tokens=64000
+  //   opus 4.5: thinking={enabled,budget_tokens:31999}, output_config={effort:"high"}, max_tokens=32000
+  //   sonnet:   thinking={enabled,budget_tokens:31999}, no output_config, max_tokens=32000
+  //   haiku:    none of these fields, max_tokens=32000
+  const isOpus = model.toLowerCase().includes('opus');
+  // Opus 4.6+ uses adaptive thinking + 64000; 4.5 uses enabled+31999 + 32000
+  const isOpusModern = isOpus && /opus[-_]?4[-_.]?[67]/i.test(model);
+  const isOpus47 = isOpus && /opus[-_]?4[-_.]?7/i.test(model);
+  const defaultMaxTokens = isOpusModern ? OPUS_MAX_TOKENS : DEFAULT_MAX_TOKENS;
   ccRequest.max_tokens = resolveMaxTokens(opts.maxTokens, clientBody, defaultMaxTokens);
 
   // Model-specific fields — order: thinking, context_management, output_config
-  // Based on CC v2.1.138 live capture:
-  //   opus:  thinking=adaptive, output_config.effort=xhigh, max_tokens=64000
-  //   sonnet: thinking=enabled+budget_tokens(31999), no output_config, max_tokens=32000
-  //   haiku: none of these fields
   if (!isHaiku) {
-    const isOpus = model.toLowerCase().includes('opus');
-    if (isOpus) {
+    if (isOpusModern) {
       ccRequest.thinking = { type: 'adaptive' };
-      ccRequest.output_config = { effort: resolveEffort(opts.effort, clientBody) || 'xhigh' };
     } else {
       ccRequest.thinking = { type: 'enabled', budget_tokens: 31999 };
+    }
+    if (isOpus) {
+      // Opus adds output_config.effort; merge with any client format (json_schema etc.)
+      const clientOC = clientBody.output_config as Record<string, unknown> | undefined;
+      const hasClientOC = clientOC && typeof clientOC === 'object' && Object.keys(clientOC).length > 0;
+      const resolvedEffort = opts.effort ? resolveEffort(opts.effort, clientBody) : (isOpus47 ? 'xhigh' : 'high');
+      ccRequest.output_config = hasClientOC
+        ? { ...clientOC, effort: resolvedEffort }
+        : { effort: resolvedEffort };
+    } else {
       // Sonnet does not send output_config — omit unless client explicitly sent one
       const clientOC = clientBody.output_config as Record<string, unknown> | undefined;
       if (clientOC && typeof clientOC === 'object' && Object.keys(clientOC).length > 0) {

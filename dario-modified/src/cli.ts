@@ -187,6 +187,7 @@ async function proxy() {
     || process.env.DARIO_LOG_BODIES === '1';
   const verbose = verboseBodies || args.includes('--verbose') || args.includes('-v');
   const passthrough = args.includes('--passthrough') || args.includes('--thin');
+  const ccPassthrough = args.includes('--cc-passthrough') || process.env.DARIO_CC_PASSTHROUGH === '1';
   const preserveTools = args.includes('--preserve-tools') || args.includes('--keep-tools');
   const hybridTools = args.includes('--hybrid-tools') || args.includes('--context-inject');
   const mergeTools = args.includes('--merge-tools') || args.includes('--append-tools');
@@ -329,7 +330,7 @@ async function proxy() {
     process.exit(1);
   }
 
-  await startProxy({ port, host, verbose, verboseBodies, model, passthrough, preserveTools, hybridTools, mergeTools, noAutoDetect, strictTls, pacingMinMs, pacingJitterMs, drainOnClose, sessionIdleRotateMs, sessionRotateJitterMs, sessionMaxAgeMs, sessionPerClient, preserveOrchestrationTags, noLiveCapture, strictTemplate, maxConcurrent, maxQueued, queueTimeoutMs, effort, maxTokens, logFile, passthroughBetas });
+  await startProxy({ port, host, verbose, verboseBodies, model, passthrough, ccPassthrough, preserveTools, hybridTools, mergeTools, noAutoDetect, strictTls, pacingMinMs, pacingJitterMs, drainOnClose, sessionIdleRotateMs, sessionRotateJitterMs, sessionMaxAgeMs, sessionPerClient, preserveOrchestrationTags, noLiveCapture, strictTemplate, maxConcurrent, maxQueued, queueTimeoutMs, effort, maxTokens, logFile, passthroughBetas });
 }
 
 /**
@@ -808,6 +809,9 @@ async function help() {
                              claude:opus, local:qwen-coder (forces backend)
                              Default: passthrough (client decides)
     --passthrough, --thin    Thin proxy — OAuth swap only, no injection
+    --cc-passthrough         Auto-detect claude-cli clients and forward as-is
+                             CC clients already send the correct fingerprint;
+                             rebuilding via template replay introduces differences
     --preserve-tools         Forward client tool schemas unchanged
                              Loses subscription routing; use for custom agents
     --hybrid-tools           Remap to CC tools, inject sessionId/requestId/etc.
