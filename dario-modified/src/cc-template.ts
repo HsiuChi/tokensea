@@ -898,6 +898,7 @@ const TOOL_MAP: Record<string, ToolMapping> = {
  */
 /** Default outbound max_tokens when neither a passthrough nor an explicit value is set. Matches CC 2.1.116's wire default. */
 export const DEFAULT_MAX_TOKENS = 32000;
+export const OPUS_MAX_TOKENS = 64000;
 
 /**
  * Resolve the outbound `max_tokens` value.
@@ -909,12 +910,12 @@ export const DEFAULT_MAX_TOKENS = 32000;
  * dario#88 (Hermes compat — Hermes requests up to 128k for Opus 4.7, 64k for
  * Sonnet; pinning to 32k silently truncated its output capacity).
  */
-export function resolveMaxTokens(flag: number | 'client' | undefined, clientBody: Record<string, unknown>): number {
-  if (flag === undefined) return DEFAULT_MAX_TOKENS;
+export function resolveMaxTokens(flag: number | 'client' | undefined, clientBody: Record<string, unknown>, defaultMax = DEFAULT_MAX_TOKENS): number {
+  if (flag === undefined) return defaultMax;
   if (flag === 'client') {
     const clientMT = clientBody.max_tokens;
     if (typeof clientMT === 'number' && Number.isFinite(clientMT) && clientMT > 0) return Math.floor(clientMT);
-    return DEFAULT_MAX_TOKENS;
+    return defaultMax;
   }
   return flag;
 }
@@ -1269,17 +1270,29 @@ export function buildCCRequest(
     }),
   };
 
-  ccRequest.max_tokens = resolveMaxTokens(opts.maxTokens, clientBody);
+  // max_tokens: opus defaults to 64000, others to 32000
+  const defaultMaxTokens = model.toLowerCase().includes('opus') ? OPUS_MAX_TOKENS : DEFAULT_MAX_TOKENS;
+  ccRequest.max_tokens = resolveMaxTokens(opts.maxTokens, clientBody, defaultMaxTokens);
 
   // Model-specific fields — order: thinking, context_management, output_config
+  // Based on CC v2.1.138 live capture:
+  //   opus:  thinking=adaptive, output_config.effort=xhigh, max_tokens=64000
+  //   sonnet: thinking=enabled+budget_tokens(31999), no output_config, max_tokens=32000
+  //   haiku: none of these fields
   if (!isHaiku) {
-    ccRequest.thinking = { type: 'adaptive' };
+    const isOpus = model.toLowerCase().includes('opus');
+    if (isOpus) {
+      ccRequest.thinking = { type: 'adaptive' };
+      ccRequest.output_config = { effort: resolveEffort(opts.effort, clientBody) || 'xhigh' };
+    } else {
+      ccRequest.thinking = { type: 'enabled', budget_tokens: 31999 };
+      // Sonnet does not send output_config — omit unless client explicitly sent one
+      const clientOC = clientBody.output_config as Record<string, unknown> | undefined;
+      if (clientOC && typeof clientOC === 'object' && Object.keys(clientOC).length > 0) {
+        ccRequest.output_config = { ...clientOC, effort: resolveEffort(opts.effort, clientBody) };
+      }
+    }
     ccRequest.context_management = { edits: [{ type: 'clear_thinking_20251015', keep: 'all' }] };
-    // output_config.effort default is `'high'` (matches CC 2.1.116's wire
-    // value). `--effort` flag overrides; `'client'` passes through whatever
-    // the client sent (or falls back to `'high'` if the client didn't
-    // include an output_config). See dario#87.
-    ccRequest.output_config = { effort: resolveEffort(opts.effort, clientBody) };
   }
 
   ccRequest.stream = stream;
