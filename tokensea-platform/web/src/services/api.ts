@@ -1,6 +1,6 @@
 const API_BASE = '';
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+async function request<T>(path: string, options?: RequestInit, raw?: boolean): Promise<T> {
   const token = localStorage.getItem("token");
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -14,7 +14,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   if (!res.ok) {
     throw new Error(data.error?.message || `Request failed: ${res.status}`);
   }
-  return data.data ?? data;
+  return raw ? data : (data.data ?? data);
 }
 
 export const api = {
@@ -59,7 +59,7 @@ export const api = {
   listModels: () =>
     request<{ object: string; data: any[] }>("/v1/models"),
   getMarketplaceModels: (params?: string) =>
-    request<any>(`/api/public/models${params ? `?${params}` : ""}`),
+    request<any>(`/api/public/models${params ? `?${params}` : ""}`, undefined, true),
   getModelDetail: (alias: string) =>
     request<any>(`/api/public/models/${alias}`),
 
