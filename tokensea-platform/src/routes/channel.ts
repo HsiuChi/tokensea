@@ -1,0 +1,71 @@
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import { ChannelService } from "../services/channel/channel-service.js";
+import { adminAuthHook } from "../middleware/user-auth.js";
+
+export async function channelRoutes(app: FastifyInstance) {
+  const channelService = new ChannelService(app.prisma);
+
+  app.get("/", { preHandler: adminAuthHook }, async (request) => {
+    const query = z.object({ page: z.coerce.number().min(1).default(1), pageSize: z.coerce.number().min(1).max(100).default(20) }).parse(request.query);
+    return { data: await channelService.list(query) };
+  });
+
+  app.get("/:id", { preHandler: adminAuthHook }, async (request) => {
+    const { id } = z.object({ id: z.coerce.bigint() }).parse(request.params);
+    return { data: await channelService.get(id) };
+  });
+
+  app.post("/", { preHandler: adminAuthHook }, async (request) => {
+    const body = z.object({
+      name: z.string().min(1).max(64),
+      type: z.enum(["claude", "codex", "openai", "anthropic", "gemini", "deepseek", "custom"]),
+      models: z.array(z.string()),
+      priority: z.number().int().optional(),
+      weight: z.number().int().optional(),
+    }).parse(request.body);
+    return { data: await channelService.create(body) };
+  });
+
+  app.put("/:id", { preHandler: adminAuthHook }, async (request) => {
+    const { id } = z.object({ id: z.coerce.bigint() }).parse(request.params);
+    const body = request.body as Record<string, any>;
+    return { data: await channelService.update(id, body) };
+  });
+
+  app.delete("/:id", { preHandler: adminAuthHook }, async (request) => {
+    const { id } = z.object({ id: z.coerce.bigint() }).parse(request.params);
+    await channelService.delete(id);
+    return { data: { message: "Channel deleted" } };
+  });
+
+  // Node operations
+  app.post("/:id/nodes", { preHandler: adminAuthHook }, async (request) => {
+    const { id } = z.object({ id: z.coerce.bigint() }).parse(request.params);
+    const body = z.object({
+      name: z.string().min(1).max(64),
+      internalUrl: z.string().min(1),
+      internalApiKey: z.string().min(1),
+      maxConcurrent: z.number().int().optional(),
+    }).parse(request.body);
+    return { data: await channelService.addNode(id, body) };
+  });
+
+  app.put("/nodes/:nodeId", { preHandler: adminAuthHook }, async (request) => {
+    const { nodeId } = z.object({ nodeId: z.coerce.bigint() }).parse(request.params);
+    const body = request.body as Record<string, any>;
+    return { data: await channelService.updateNode(nodeId, body) };
+  });
+
+  app.delete("/nodes/:nodeId", { preHandler: adminAuthHook }, async (request) => {
+    const { nodeId } = z.object({ nodeId: z.coerce.bigint() }).parse(request.params);
+    await channelService.deleteNode(nodeId);
+    return { data: { message: "Node deleted" } };
+  });
+
+  // Health check
+  app.post("/nodes/:nodeId/health", { preHandler: adminAuthHook }, async (request) => {
+    const { nodeId } = z.object({ nodeId: z.coerce.bigint() }).parse(request.params);
+    return { data: await channelService.healthCheck(nodeId) };
+  });
+}

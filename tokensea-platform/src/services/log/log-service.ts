@@ -1,0 +1,193 @@
+import type { PrismaClient } from "@prisma/client";
+
+export class LogService {
+  constructor(private prisma: PrismaClient) {}
+
+  async listRequestLogs(opts: {
+    userId?: bigint; apiKeyId?: bigint; page?: number; pageSize?: number;
+    startDate?: string; endDate?: string; status?: string; requestedModel?: string;
+  }) {
+    const page = opts.page ?? 1;
+    const pageSize = Math.min(opts.pageSize ?? 20, 100);
+    const where: any = {};
+    if (opts.userId) where.userId = opts.userId;
+    if (opts.apiKeyId) where.apiKeyId = opts.apiKeyId;
+    if (opts.status) where.status = opts.status;
+    if (opts.requestedModel) where.requestedModel = { contains: opts.requestedModel, mode: "insensitive" };
+    if (opts.startDate || opts.endDate) {
+      where.startedAt = {};
+      if (opts.startDate) where.startedAt.gte = new Date(opts.startDate);
+      if (opts.endDate) where.startedAt.lte = new Date(opts.endDate);
+    }
+
+    const [items, total] = await Promise.all([
+      this.prisma.requestLog.findMany({ where, orderBy: { startedAt: "desc" }, skip: (page - 1) * pageSize, take: pageSize }),
+      this.prisma.requestLog.count({ where }),
+    ]);
+    return { items, total, page, pageSize };
+  }
+
+  async getUsageStats(userId: bigint, period: string, startDate?: string, endDate?: string) {
+    // Resolve date range
+    const now = new Date();
+    let gte: Date;
+    let isRelative = false;
+    if (startDate) {
+      gte = new Date(startDate);
+      isRelative = true;
+    } else if (/^\d{6}$/.test(period)) {
+      gte = new Date(`${period.slice(0, 4)}-${period.slice(4)}-01`);
+    } else if (period === "24h") {
+      gte = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      isRelative = true;
+    } else if (period === "7d") {
+      gte = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      isRelative = true;
+    } else if (period === "30d") {
+      gte = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      isRelative = true;
+    } else {
+      gte = new Date(`${period.slice(0, 4)}-${period.slice(4)}-01`);
+    }
+
+    const logWhere: any = { userId, startedAt: { gte } };
+    if (endDate) {
+      logWhere.startedAt.lte = new Date(endDate);
+    }
+
+    // For fixed monthly periods use ledgers; for relative periods compute from logs
+    let totals: { billedRequests: number; inputTokens: number; outputTokens: number; cacheCreationTokens: number; cacheReadTokens: number; billableUnits: bigint };
+    if (!isRelative) {
+      const ledgers = await this.prisma.usageLedger.findMany({
+        where: { userId, billingPeriod: period },
+        orderBy: { createdAt: "desc" },
+      });
+      totals = ledgers.reduce((acc, l) => ({
+        billedRequests: acc.billedRequests + l.billedRequests,
+        inputTokens: acc.inputTokens + l.inputTokens,
+        outputTokens: acc.outputTokens + l.outputTokens,
+        cacheCreationTokens: (acc.cacheCreationTokens ?? 0) + (l.cacheCreationTokens ?? 0),
+        cacheReadTokens: (acc.cacheReadTokens ?? 0) + (l.cacheReadTokens ?? 0),
+        billableUnits: acc.billableUnits + l.billableUnits,
+      }), { billedRequests: 0, inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, billableUnits: 0n });
+    } else {
+      totals = { billedRequests: 0, inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, billableUnits: 0n };
+    }
+
+    // Daily breakdown with per-model detail from request logs
+    const dailyMap = new Map<string, { requests: number; tokens: number; cost: bigint; models: Map<string, { requests: number; cost: bigint }> }>();
+    const logs = await this.prisma.requestLog.findMany({
+      where: logWhere,
+      orderBy: { startedAt: "asc" },
+    });
+
+    for (const log of logs) {
+      if (isRelative) {
+        totals.billedRequests++;
+        totals.inputTokens += log.inputTokens;
+        totals.outputTokens += log.outputTokens;
+        totals.cacheCreationTokens += (log as any).cacheCreationTokens ?? 0;
+        totals.cacheReadTokens += (log as any).cacheReadTokens ?? 0;
+        totals.billableUnits += log.billableUnits;
+      }
+      const day = log.startedAt.toISOString().slice(0, 10);
+      const existing = dailyMap.get(day) ?? { requests: 0, tokens: 0, cost: 0n, models: new Map<string, { requests: number; cost: bigint }>() };
+      existing.requests++;
+      existing.tokens += log.inputTokens + log.outputTokens;
+      existing.cost += log.billableUnits;
+      // Per-model within this day
+      const m = log.requestedModel;
+      const me = existing.models.get(m) ?? { requests: 0, cost: 0n };
+      me.requests++;
+      me.cost += log.billableUnits;
+      existing.models.set(m, me);
+      dailyMap.set(day, existing);
+    }
+
+    const daily = Array.from(dailyMap.entries()).map(([date, data]) => ({
+      date,
+      requests: data.requests,
+      tokens: data.tokens,
+      cost: data.cost.toString(),
+      models: Array.from(data.models.entries()).map(([model, md]) => ({
+        model,
+        requests: md.requests,
+        cost: md.cost.toString(),
+      })),
+    }));
+
+    // Model breakdown
+    const modelMap = new Map<string, { requestCount: number; promptTokens: number; completionTokens: number; cacheCreationTokens: number; cacheReadTokens: number; cost: bigint }>();
+    for (const log of logs) {
+      const model = log.requestedModel;
+      const existing = modelMap.get(model) ?? { requestCount: 0, promptTokens: 0, completionTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, cost: 0n };
+      existing.requestCount++;
+      existing.promptTokens += log.inputTokens;
+      existing.completionTokens += log.outputTokens;
+      existing.cacheCreationTokens += (log as any).cacheCreationTokens ?? 0;
+      existing.cacheReadTokens += (log as any).cacheReadTokens ?? 0;
+      existing.cost += log.billableUnits;
+      modelMap.set(model, existing);
+    }
+    const modelBreakdown = Array.from(modelMap.entries()).map(([model, data]) => ({
+      model,
+      requestCount: data.requestCount,
+      promptTokens: data.promptTokens,
+      completionTokens: data.completionTokens,
+      cacheCreationTokens: data.cacheCreationTokens,
+      cacheReadTokens: data.cacheReadTokens,
+      cost: data.cost.toString(),
+    }));
+
+    return {
+      period,
+      totals: { ...totals, billableUnits: totals.billableUnits.toString() },
+      daily,
+      modelBreakdown,
+    };
+  }
+
+  async listAuditLogs(opts?: { page?: number; pageSize?: number; actorId?: bigint }) {
+    const page = opts?.page ?? 1;
+    const pageSize = Math.min(opts?.pageSize ?? 20, 100);
+    const where: any = {};
+    if (opts?.actorId) where.actorId = opts.actorId;
+
+    const [items, total] = await Promise.all([
+      this.prisma.auditLog.findMany({ where, orderBy: { createdAt: "desc" }, skip: (page - 1) * pageSize, take: pageSize }),
+      this.prisma.auditLog.count({ where }),
+    ]);
+    return { items, total, page, pageSize };
+  }
+
+  async writeAuditLog(data: { actorId?: bigint; actorName?: string; action: string; targetType: string; targetId?: string; detail?: any; ip?: string }) {
+    return this.prisma.auditLog.create({ data });
+  }
+
+  // Global admin stats
+  async getGlobalStats() {
+    const [totalUsers, activeUsers, totalKeys, activeKeys, totalRequests, todayRequests] = await Promise.all([
+      this.prisma.user.count(),
+      this.prisma.user.count({ where: { status: "active" } }),
+      this.prisma.apiKey.count(),
+      this.prisma.apiKey.count({ where: { status: "active" } }),
+      this.prisma.requestLog.count(),
+      this.prisma.requestLog.count({
+        where: { startedAt: { gte: new Date(new Date().setHours(0, 0, 0, 0)) } },
+      }),
+    ]);
+
+    const totalRevenue = await this.prisma.usageLedger.aggregate({ _sum: { billableUnits: true } });
+    const nodes = await this.prisma.channelNode.findMany({ include: { channel: true } });
+
+    return {
+      totalUsers, activeUsers, totalKeys, activeKeys,
+      totalRequests, todayRequests,
+      totalRevenue: (totalRevenue._sum.billableUnits ?? 0n).toString(),
+      nodes: nodes.map(n => ({
+        id: n.id.toString(), name: n.name, channel: n.channel.name,
+        status: n.status, currentLoad: n.currentLoad, maxConcurrent: n.maxConcurrent,
+      })),
+    };
+  }
+}

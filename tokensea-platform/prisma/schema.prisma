@@ -1,0 +1,508 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// Enums
+// ============================================================
+
+enum UserRole {
+  user
+  admin
+  root
+}
+
+enum UserStatus {
+  active
+  disabled
+}
+
+enum ApiKeyStatus {
+  active
+  disabled
+  expired
+}
+
+enum PlanTier {
+  free
+  starter
+  pro
+  max
+}
+
+enum QuotaMode {
+  request_count
+  token_count
+  mixed
+}
+
+enum BindingStatus {
+  active
+  expired
+  cancelled
+}
+
+enum SubOrderStatus {
+  pending
+  success
+  failed
+  refunded
+}
+
+enum ChannelType {
+  claude
+  codex
+  openai
+  anthropic
+  gemini
+  deepseek
+  custom
+}
+
+enum ChannelStatus {
+  active
+  disabled
+  maintenance
+}
+
+enum NodeStatus {
+  healthy
+  degraded
+  unhealthy
+}
+
+enum RequestStatus {
+  succeeded
+  failed
+  timeout
+  rate_limited
+  consumer_abort
+}
+
+enum RouteStatus {
+  active
+  inactive
+}
+
+enum RedemptionStatus {
+  active
+  used
+  disabled
+}
+
+enum TopUpStatus {
+  pending
+  success
+  failed
+  refunded
+}
+
+enum SettlementStatus {
+  final
+  adjusted
+}
+
+// ============================================================
+// Models
+// ============================================================
+
+model User {
+  id              BigInt       @id @default(autoincrement())
+  username        String       @unique @db.VarChar(32)
+  passwordHash    String       @db.VarChar(255)
+  email           String?      @unique @db.VarChar(255)
+  emailVerified   Boolean      @default(false)
+  emailVerifyToken String?     @db.VarChar(64)
+  emailVerifyTokenExpires DateTime?
+  resetToken      String?      @db.VarChar(64)
+  resetTokenExpires DateTime?
+  name            String?      @db.VarChar(64)
+  avatar          String?      @db.VarChar(512)
+  role            UserRole     @default(user)
+  status          UserStatus   @default(active)
+  quota           BigInt       @default(0)
+  usedQuota       BigInt       @default(0)
+  inviteCode      String       @unique @db.VarChar(16)
+  invitedBy       BigInt?
+  inviter         User?        @relation("UserInvites", fields: [invitedBy], references: [id])
+  invitees        User[]       @relation("UserInvites")
+  requestCount    BigInt       @default(0)
+  createdBy       BigInt?
+  creator         User?        @relation("AdminCreatedUsers", fields: [createdBy], references: [id])
+  createdUsers    User[]       @relation("AdminCreatedUsers")
+  remark          String?      @db.VarChar(512)
+  totpSecret      String?      @db.VarChar(64)
+  totpEnabled     Boolean      @default(false)
+  recoveryCodes   Json?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  apiKeys         ApiKey[]
+  bindings        UserPlanBinding[]
+  requestLogs     RequestLog[]
+  usageLedgers    UsageLedger[]
+  topUpOrders     TopUpOrder[]
+  subscriptionOrders SubscriptionOrder[]
+
+  @@index([invitedBy])
+  @@index([createdBy])
+  @@map("users")
+}
+
+model Plan {
+  id                        BigInt       @id @default(autoincrement())
+  name                      String       @unique @db.VarChar(64)
+  displayName               String       @db.VarChar(64)
+  description               String?      @db.VarChar(512)
+  tier                      PlanTier
+  quotaMode                 QuotaMode    @default(mixed)
+  requestLimit              BigInt       @default(-1)
+  tokenLimit                BigInt       @default(-1)
+  billableUnitLimit         BigInt       @default(-1)
+  dailyBillableUnitLimit    BigInt       @default(-1)
+  qpsLimit                  Int          @default(5)
+  rpmLimit                  Int          @default(60)
+  tpmLimit                  Int          @default(100000)
+  maxTokensPerRequest       Int          @default(128000)
+  allowedModelAliases       Json
+  billingCycleType          String       @default("monthly")
+  billingMultiplier         Float        @default(1.0)
+  price                     Int          @default(0)
+  isPublic                  Boolean      @default(true)
+  isSubscription            Boolean      @default(true)
+  sortOrder                 Int          @default(0)
+  createdAt                 DateTime     @default(now())
+  updatedAt                 DateTime     @updatedAt
+
+  bindings                  UserPlanBinding[]
+  apiKeys                   ApiKey[]
+
+  @@map("plans")
+}
+
+model UserPlanBinding {
+  id          BigInt        @id @default(autoincrement())
+  userId      BigInt
+  planId      BigInt
+  startAt     DateTime
+  endAt       DateTime
+  status      BindingStatus @default(active)
+  autoRenew   Boolean       @default(false)
+  quotaGranted BigInt       @default(0)
+  quotaUsed   BigInt        @default(0)
+  cancelledAt DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  user        User          @relation(fields: [userId], references: [id])
+  plan        Plan          @relation(fields: [planId], references: [id])
+
+  @@unique([userId, planId, startAt])
+  @@index([userId, status, startAt, endAt])
+  @@map("user_plan_bindings")
+}
+
+model ApiKey {
+  id              BigInt       @id @default(autoincrement())
+  userId          BigInt
+  keyPrefix       String       @db.VarChar(12)
+  keyHash         String       @unique @db.VarChar(64)
+  keyPlain        String?      @db.VarChar(128)
+  name            String       @db.VarChar(64)
+  status          ApiKeyStatus @default(active)
+  quota           BigInt       @default(-1)
+  usedQuota       BigInt       @default(0)
+  maxCalls        BigInt       @default(-1)
+  usedCalls       BigInt       @default(0)
+  dailyLimit      BigInt       @default(-1)
+  tokenLimit      BigInt       @default(-1)
+  models          Json?
+  planId          BigInt?
+  expiresAt       DateTime?
+  lastUsedAt      DateTime?
+  allowedIps      Json?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  user            User         @relation(fields: [userId], references: [id])
+  plan            Plan?        @relation(fields: [planId], references: [id])
+  requestLogs     RequestLog[]
+  usageLedgers    UsageLedger[]
+
+  @@index([userId, status])
+  @@index([keyHash])
+  @@map("api_keys")
+}
+
+model ModelAlias {
+  id              BigInt       @id @default(autoincrement())
+  alias           String       @unique @db.VarChar(64)
+  displayName     String       @db.VarChar(64)
+  provider        String       @db.VarChar(32)
+  description     String?      @db.VarChar(512)
+  category        String       @default("chat") @db.VarChar(32)
+  tags            Json?
+  iconUrl         String?      @db.VarChar(512)
+  inputPrice        Float        @default(0)
+  outputPrice       Float        @default(0)
+  cacheWrite5mPrice Float        @default(0)
+  cacheWrite1hPrice Float        @default(0)
+  cacheReadPrice    Float        @default(0)
+  pricing           Json?
+  supportsStream    Boolean      @default(true)
+  supportsTools   Boolean      @default(true)
+  supportsVision  Boolean      @default(false)
+  maxContext      Int          @default(200000)
+  sortOrder       Int          @default(0)
+  status          RouteStatus  @default(active)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  routes          ModelRoute[]
+
+  @@map("model_aliases")
+}
+
+model ModelRoute {
+  id              BigInt       @id @default(autoincrement())
+  aliasId         BigInt
+  priority        Int          @default(0)
+  channelId       BigInt
+  upstreamModel   String       @db.VarChar(64)
+  status          RouteStatus  @default(active)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  alias           ModelAlias   @relation(fields: [aliasId], references: [id])
+  channel         Channel      @relation(fields: [channelId], references: [id])
+
+  @@index([aliasId, priority])
+  @@map("model_routes")
+}
+
+model Channel {
+  id              BigInt        @id @default(autoincrement())
+  name            String        @db.VarChar(64)
+  type            ChannelType
+  status          ChannelStatus @default(active)
+  cpaUpstreamKey  String?       @db.VarChar(64)
+  baseUrl         String?       @db.VarChar(512)
+  models          Json
+  priority        Int           @default(0)
+  weight          Int           @default(1)
+  testModel       String?       @db.VarChar(64)
+  lastTestAt      DateTime?
+  lastTestLatency Int?
+  totalRequests   BigInt        @default(0)
+  failedRequests  BigInt        @default(0)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  nodes           ChannelNode[]
+  routes          ModelRoute[]
+
+  @@index([status, priority])
+  @@map("channels")
+}
+
+model ChannelNode {
+  id              BigInt       @id @default(autoincrement())
+  channelId       BigInt
+  name            String       @db.VarChar(64)
+  internalUrl     String       @db.VarChar(256)
+  internalApiKey  String       @db.VarChar(128)
+  status          NodeStatus   @default(healthy)
+  accountId       String?      @db.VarChar(64)
+  oauthExpiresAt  DateTime?
+  maxConcurrent   Int          @default(5)
+  currentLoad     Int          @default(0)
+  totalRequests   BigInt       @default(0)
+  failedRequests  BigInt       @default(0)
+  last429At       DateTime?
+  lastHealthCheck DateTime?
+  healthStatus    Json?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  channel         Channel      @relation(fields: [channelId], references: [id])
+
+  @@index([channelId, status])
+  @@map("channel_nodes")
+}
+
+model RequestLog {
+  id                  BigInt        @id @default(autoincrement())
+  requestId           String        @unique @db.VarChar(36)
+  userId              BigInt
+  apiKeyId            BigInt
+  endpoint            String        @db.VarChar(32)
+  requestedModel      String        @db.VarChar(64)
+  actualUpstreamModel String?       @db.VarChar(64)
+  channelId           BigInt?
+  nodeId              BigInt?
+  stream              Boolean       @default(false)
+  status              RequestStatus
+  httpStatus          Int?
+  errorCode           String?       @db.VarChar(32)
+  inputTokens         Int           @default(0)
+  outputTokens        Int           @default(0)
+  cacheCreationTokens Int           @default(0)
+  cacheReadTokens     Int           @default(0)
+  billableUnits       BigInt        @default(0)
+  pricingDetail       Json?
+  startedAt           DateTime
+  finishedAt          DateTime?
+  durationMs          Int?
+
+  user                User          @relation(fields: [userId], references: [id])
+  apiKey              ApiKey        @relation(fields: [apiKeyId], references: [id])
+
+  @@index([userId, startedAt(sort: Desc)])
+  @@index([apiKeyId, startedAt(sort: Desc)])
+  @@index([channelId, startedAt(sort: Desc)])
+  @@map("request_logs")
+}
+
+model UsageLedger {
+  id                  BigInt           @id @default(autoincrement())
+  requestId           String           @db.VarChar(36)
+  userId              BigInt
+  apiKeyId            BigInt
+  billingPeriod       String           @db.VarChar(8)
+  billedRequests      Int              @default(1)
+  inputTokens         Int              @default(0)
+  outputTokens        Int              @default(0)
+  cacheCreationTokens Int              @default(0)
+  cacheReadTokens     Int              @default(0)
+  billableUnits       BigInt           @default(0)
+  settlementStatus    SettlementStatus @default(final)
+  createdAt           DateTime         @default(now())
+
+  user                User             @relation(fields: [userId], references: [id])
+  apiKey              ApiKey           @relation(fields: [apiKeyId], references: [id])
+
+  @@unique([requestId, settlementStatus])
+  @@index([userId, billingPeriod])
+  @@index([apiKeyId, billingPeriod])
+  @@map("usage_ledgers")
+}
+
+model Redemption {
+  id              BigInt            @id @default(autoincrement())
+  code            String            @unique @db.VarChar(32)
+  name            String            @db.VarChar(64)
+  type            String            @default("quota")
+  quota           BigInt            @default(0)
+  keyQuota        BigInt            @default(-1)
+  keyModels       Json?
+  keyMaxCalls     BigInt            @default(-1)
+  keyName         String?           @db.VarChar(64)
+  keyDailyLimit   BigInt            @default(-1)
+  keyTokenLimit   BigInt            @default(-1)
+  keyExpiresAt    DateTime?
+  count           Int               @default(1)
+  usedCount       Int               @default(0)
+  usedBy          Json?
+  status          RedemptionStatus  @default(active)
+  createdBy       BigInt?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([status])
+  @@map("redemptions")
+}
+
+model TopUpOrder {
+  id              BigInt       @id @default(autoincrement())
+  userId          BigInt
+  tradeNo         String       @unique @db.VarChar(32)
+  gatewayTradeNo  String?      @db.VarChar(64)
+  paymentMethod   String       @db.VarChar(16)
+  amount          BigInt       @default(0)
+  money           Decimal      @default(0) @db.Decimal(10, 2)
+  status          TopUpStatus  @default(pending)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  user            User         @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("top_up_orders")
+}
+
+model AuditLog {
+  id              BigInt       @id @default(autoincrement())
+  actorId         BigInt?
+  actorName       String?      @db.VarChar(32)
+  action          String       @db.VarChar(64)
+  targetType      String       @db.VarChar(32)
+  targetId        String?      @db.VarChar(64)
+  detail          Json?
+  ip              String?      @db.VarChar(45)
+  createdAt       DateTime     @default(now()) @map("created_at")
+
+  @@index([actorId, createdAt(sort: Desc)])
+  @@index([targetType, targetId])
+  @@map("audit_logs")
+}
+
+model Option {
+  key             String       @id @db.VarChar(64)
+  value           String       @db.Text
+
+  @@map("options")
+}
+
+model SubscriptionOrder {
+  id              BigInt       @id @default(autoincrement())
+  userId          BigInt
+  planId          BigInt
+  bindingId       BigInt
+  tradeNo         String       @unique @db.VarChar(32)
+  gatewayTradeNo  String?      @db.VarChar(64)
+  paymentMethod   String       @default("balance") @db.VarChar(16)
+  amount          BigInt       @default(0)
+  money           Decimal      @default(0) @db.Decimal(10, 2)
+  durationDays    Int          @default(30)
+  status          SubOrderStatus @default(pending)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  user            User         @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("subscription_orders")
+}
+
+model SensitiveWord {
+  id          BigInt       @id @default(autoincrement())
+  word        String       @unique @db.VarChar(128)
+  category    String       @default("general") @db.VarChar(32)
+  action      String       @default("block") @db.VarChar(16)
+  enabled     Boolean      @default(true)
+  createdBy   BigInt?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([enabled, category])
+  @@map("sensitive_words")
+}
+
+model Announcement {
+  id              BigInt       @id @default(autoincrement())
+  title           String       @db.VarChar(128)
+  content         String       @db.Text
+  type            String       @default("info") @db.VarChar(16)
+  pinned          Boolean      @default(false)
+  status          String       @default("active") @db.VarChar(16)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([status, pinned, createdAt(sort: Desc)])
+  @@map("announcements")
+}
