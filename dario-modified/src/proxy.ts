@@ -22,7 +22,7 @@ import { classifyAuxRequest, forwardAuxRequest, type AuxResult } from './aux-pro
 const ANTHROPIC_API = 'https://api.anthropic.com';
 const TLS_SHIM_URL = process.env.DARIO_TLS_SHIM !== '0' ? 'http://127.0.0.1:3443' : '';
 const DEFAULT_PORT = 3456;
-const MAX_BODY_BYTES = 64 * 1024 * 1024; // 64 MB — PDF/image uploads base64-encode to ~1.37x original
+const MAX_BODY_BYTES = 32 * 1024 * 1024; // 32 MB — match Anthropic API limit, passthrough should not truncate
 const UPSTREAM_TIMEOUT_MS = 300_000; // 5 min — matches Anthropic SDK default
 const BODY_READ_TIMEOUT_MS = 30_000; // 30s — prevents slow-loris on body reads
 const DEFAULT_HOST = '127.0.0.1';
