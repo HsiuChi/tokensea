@@ -5,7 +5,7 @@ import { readFileSync, readdirSync, createWriteStream, type WriteStream } from '
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { arch, platform } from 'node:process';
-import { getAccessToken, getStatus } from './oauth.js';
+import { getAccessToken, getStatus, startupRefresh } from './oauth.js';
 import { buildCCRequest, reverseMapResponse, createStreamingReverseMapper, CC_TEMPLATE, reloadTemplate, type ToolMapping, type RequestContext, type EffortValue } from './cc-template.js';
 import { describeTemplate, detectDrift, checkCCCompat } from './live-fingerprint.js';
 import { AccountPool, computeStickyKey, parseRateLimits, modelFamily, type PoolAccount } from './pool.js';
@@ -22,7 +22,7 @@ import { classifyAuxRequest, forwardAuxRequest, type AuxResult } from './aux-pro
 const ANTHROPIC_API = 'https://api.anthropic.com';
 const TLS_SHIM_URL = process.env.DARIO_TLS_SHIM !== '0' ? 'http://127.0.0.1:3443' : '';
 const DEFAULT_PORT = 3456;
-const MAX_BODY_BYTES = 10 * 1024 * 1024; // 10 MB — generous for large prompts, prevents abuse
+const MAX_BODY_BYTES = 64 * 1024 * 1024; // 64 MB — PDF/image uploads base64-encode to ~1.37x original
 const UPSTREAM_TIMEOUT_MS = 300_000; // 5 min — matches Anthropic SDK default
 const BODY_READ_TIMEOUT_MS = 30_000; // 30s — prevents slow-loris on body reads
 const DEFAULT_HOST = '127.0.0.1';
@@ -766,6 +766,19 @@ export async function startProxy(opts: ProxyOptions = {}): Promise<void> {
       // for actual API requests until credentials are provided.
       console.warn('[dario] Not authenticated. Health endpoints available; proxy requests will return 503.');
       console.warn('[dario] Run `dario login` or set DARIO_OAUTH_* environment variables.');
+    } else if (status.status === 'expired' || status.status === 'expiring') {
+      // [TokenSea] Proactive startup refresh — try to refresh expired tokens
+      // immediately rather than waiting for the first request. This surfaces
+      // invalid_grant errors early and logs a clear re-login instruction.
+      console.log('[dario] Startup: tokens expired/expiring, attempting proactive refresh...');
+      const result = await startupRefresh();
+      if (result.status === 'healthy') {
+        console.log(`[dario] Startup refresh: ${result.message}`);
+        // Re-fetch status after successful refresh
+        status = await getStatus();
+      } else {
+        console.error(`[dario] Startup refresh: ${result.message}`);
+      }
     }
   }
 
