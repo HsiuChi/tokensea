@@ -3,13 +3,11 @@ import { useNavigate, Link } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 import { useAuth } from "@/hooks/useAuth"
 import { Mail, Loader2, CheckCircle, AlertCircle, Send, ArrowLeft } from "lucide-react"
-import { ThemeToggle } from "@/components/ThemeToggle"
-import { AuthBrand } from "@/components/AuthBrand"
+import { AuthPageShell } from "@/components/AuthPageShell"
 import api from "@/lib/api"
 
 export function LoginPage() {
   const { t } = useTranslation()
-  const { i18n } = useTranslation()
   const { login, refreshUser } = useAuth()
   const navigate = useNavigate()
 
@@ -134,88 +132,16 @@ export function LoginPage() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-x-hidden bg-[#eef6ff] text-slate-950 dark:bg-[#050b14] dark:text-slate-100">
-      {/* Background effects — light */}
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_15%,rgba(255,255,255,0.95)_0,rgba(255,255,255,0.7)_28%,rgba(219,235,255,0.58)_52%,rgba(128,184,255,0.45)_100%)] dark:hidden" />
-      <div className="absolute -right-40 top-0 h-[620px] w-[760px] rounded-full bg-blue-300/30 blur-3xl dark:hidden" />
-      <div className="absolute bottom-[-260px] left-[34%] h-[520px] w-[980px] rounded-[50%] border border-blue-300/60 bg-gradient-to-r from-blue-400/20 via-sky-300/25 to-indigo-500/25 blur-[1px] dark:hidden" />
-      <div className="absolute bottom-[-210px] right-[-120px] h-[460px] w-[780px] rounded-[50%] border border-blue-200/70 bg-blue-500/20 dark:hidden" />
-      <div className="absolute bottom-0 left-0 right-0 h-52 bg-gradient-to-t from-blue-500/20 to-transparent dark:hidden" />
-      {/* Background effects — dark */}
-      <div className="absolute inset-0 hidden bg-[radial-gradient(circle_at_20%_15%,rgba(15,23,42,0.8)_0,rgba(5,11,20,0.6)_40%,rgba(2,6,12,0.9)_100%)] dark:block" />
-      <div className="absolute -right-40 top-0 hidden h-[620px] w-[760px] rounded-full bg-blue-600/10 blur-3xl dark:block" />
-      <div className="absolute bottom-[-260px] left-[34%] hidden h-[520px] w-[980px] rounded-[50%] border border-blue-500/20 bg-gradient-to-r from-blue-600/10 via-indigo-600/10 to-cyan-600/10 blur-[1px] dark:block" />
-      <div className="absolute bottom-[-210px] right-[-120px] hidden h-[460px] w-[780px] rounded-[50%] border border-blue-500/15 bg-blue-600/10 dark:block" />
-      <div className="absolute bottom-0 left-0 right-0 hidden h-52 bg-gradient-to-t from-blue-600/10 to-transparent dark:block" />
-
-      {/* Header */}
-      <header className="relative z-10 mx-auto flex max-w-[1380px] items-center justify-between px-6 py-5 sm:px-8 lg:px-10 lg:py-6">
-        <AuthBrand />
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => i18n.changeLanguage(i18n.language === "en" ? "zh" : "en")}
-            className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-white/50 dark:text-slate-300 dark:hover:bg-white/10"
-          >
-            <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
-              <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" />
-              <path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-            </svg>
-            {i18n.language === "en" ? "中文" : "EN"}
-          </button>
-          <ThemeToggle />
-        </div>
-      </header>
-
-      {/* Main content */}
-      <main className="relative z-10 mx-auto grid min-h-[calc(100svh-112px)] max-w-[1240px] grid-cols-1 items-center gap-12 px-6 pb-16 pt-3 sm:px-8 lg:grid-cols-[1fr_440px] lg:gap-20 lg:px-10 lg:pb-20">
-        {/* Left: Marketing */}
-        <section className="hidden pt-4 lg:block">
-          <p className="mb-5 inline-flex rounded-full border border-blue-200 bg-white/60 px-4 py-2 text-sm font-bold text-blue-700 shadow-sm backdrop-blur dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-400">
-            {t("auth.badge", { defaultValue: "一个 Key，多模型随意切换" })}
-          </p>
-          <h1 className="text-[54px] font-black leading-[1.08] tracking-tight text-slate-950 dark:text-slate-100">
-            API {t("auth.relay", { defaultValue: "中转" })} &
-            <br />
-            <span className="bg-gradient-to-r from-blue-600 via-cyan-500 to-indigo-500 bg-clip-text text-transparent">{t("auth.heroHighlight", { defaultValue: "AI 模型调用平台" })}</span>
-          </h1>
-          <p className="mt-6 max-w-xl text-lg font-medium leading-8 text-slate-600 dark:text-slate-400">
-            {t("auth.heroDesc", { defaultValue: "聚合 GPT、Gemini、Claude 等模型能力，统一 base URL、统一密钥管理、统一用量统计，让开发接入更简单。" })}
-          </p>
-
-          {/* Decorative card */}
-          <div className="relative mt-14 h-[250px] max-w-[520px]">
-            <div className="absolute left-10 top-10 h-40 w-40 rounded-[34px] bg-gradient-to-br from-blue-600 to-cyan-400 shadow-2xl shadow-blue-500/30 rotate-[-8deg]" />
-            <div className="absolute left-36 top-0 w-[290px] rounded-[28px] border border-white/70 bg-white/75 p-6 shadow-2xl shadow-blue-500/15 backdrop-blur-xl dark:border-white/10 dark:bg-[#1e293b]/75">
-              <div className="mb-4 flex items-center justify-between">
-                <div className="text-xl font-black dark:text-slate-100">TokenSea API</div>
-                <div className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400">ONLINE</div>
-              </div>
-              <div className="space-y-3 text-sm font-semibold text-slate-600 dark:text-slate-400">
-                <div className="flex justify-between"><span>{t("auth.cardGateway", { defaultValue: "统一网关" })}</span><span className="text-blue-600 dark:text-blue-400">/v1</span></div>
-                <div className="flex justify-between"><span>{t("auth.cardModel", { defaultValue: "模型切换" })}</span><span>GPT / Gemini</span></div>
-                <div className="flex justify-between"><span>{t("auth.cardKey", { defaultValue: "密钥管理" })}</span><span>{t("auth.cardSecure", { defaultValue: "安全加密" })}</span></div>
-              </div>
-              <div className="mt-5 h-2 rounded-full bg-slate-100 dark:bg-slate-700"><div className="h-2 w-4/5 rounded-full bg-blue-500 dark:bg-blue-400" /></div>
-            </div>
-            <svg viewBox="0 0 24 24" fill="none" className="absolute left-[450px] top-16 h-8 w-8 text-indigo-400" aria-hidden>
-              <path d="M12 2 14.6 9.4 22 12l-7.4 2.6L12 22l-2.6-7.4L2 12l7.4-2.6L12 2Z" fill="currentColor" />
-            </svg>
-            <svg viewBox="0 0 24 24" fill="none" className="absolute left-0 top-36 h-10 w-10 text-cyan-400" aria-hidden>
-              <path d="M12 2 14.6 9.4 22 12l-7.4 2.6L12 22l-2.6-7.4L2 12l7.4-2.6L12 2Z" fill="currentColor" />
-            </svg>
-            <div className="absolute bottom-2 left-64 rounded-2xl bg-white/70 px-4 py-3 text-sm font-black text-blue-700 shadow-lg shadow-blue-500/10 backdrop-blur dark:bg-[#1e293b]/70 dark:text-blue-400">
-              base_url {t("auth.oneClickReplace", { defaultValue: "一键替换" })}
-            </div>
-          </div>
-        </section>
-
-        {/* Right: Login / Verify form */}
+    <AuthPageShell>
+        {/* Login / Verify form */}
         <section className="w-full max-w-[440px] justify-self-center rounded-[28px] border border-white/80 bg-white/88 p-7 shadow-[0_30px_90px_rgba(37,99,235,0.16)] backdrop-blur-2xl sm:p-9 dark:border-blue-400/15 dark:bg-[#0d1729]/88 dark:shadow-[0_30px_90px_rgba(0,0,0,0.38)]">
           {mode === "login" ? (
             <>
               <div className="mb-9 text-center">
                 <h2 className="text-3xl font-black tracking-tight">{t("auth.welcomeBack")}</h2>
-                <p className="mt-3 text-sm font-semibold text-slate-500 dark:text-slate-400">{t("auth.signIn")} TokenSea</p>
+                <p className="mt-3 text-sm font-semibold text-slate-500 dark:text-slate-400">
+                  {t("auth.loginSubtitle", { defaultValue: "登录 TokenSea，继续管理你的 API" })}
+                </p>
               </div>
 
               <form onSubmit={handleSubmit} className="space-y-5">
@@ -384,12 +310,6 @@ export function LoginPage() {
             </>
           )}
         </section>
-      </main>
-
-      {/* Footer */}
-      <footer className="absolute bottom-6 left-0 right-0 z-10 text-center text-xs font-semibold text-white/80">
-        ©2026 TokenSea · API Gateway & Multi-Model Platform
-      </footer>
-    </div>
+    </AuthPageShell>
   )
 }
