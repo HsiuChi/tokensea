@@ -13,6 +13,7 @@ import {
   Menu, LogOut, User, Languages, ChevronDown, ChevronLeft, ChevronRight, Bell,
 } from "lucide-react"
 import { ThemeToggle } from "@/components/ThemeToggle"
+import { LogoMark } from "@/components/LogoMark"
 
 interface NavItem {
   label: string
@@ -64,16 +65,7 @@ export function AppLayout({ children, admin }: { children: React.ReactNode; admi
         {/* Logo */}
         <div className={cn("flex items-center px-5 py-7", collapsed && "justify-center px-4")}>
           <div className="flex items-center" style={{ gap: 0 }}>
-            <img
-              src="/shared/logo.png"
-              alt="TokenSea"
-              style={{
-                height: collapsed ? 40 : 80,
-                width: 'auto',
-                objectFit: 'contain',
-                marginRight: collapsed ? -6 : -13,
-              }}
-            />
+            <LogoMark size={collapsed ? 40 : 48} style={{ marginRight: collapsed ? 0 : 10 }} />
             {!collapsed && (
               <span style={{ fontFamily: 'Montserrat, Inter, sans-serif', fontWeight: 700, fontSize: 32, letterSpacing: '-0.04em', lineHeight: 1 }}>
                 <span className="text-[#0f2b50] dark:text-slate-100">Token</span><span style={{ color: '#1688e8' }}>sea</span>
@@ -161,7 +153,7 @@ export function AppLayout({ children, admin }: { children: React.ReactNode; admi
               </SheetContent>
             </Sheet>
             <div className="flex items-center" style={{ gap: 0 }}>
-              <img src="/shared/logo.png" alt="TokenSea" style={{ height: 36, width: 'auto', objectFit: 'contain', marginRight: -6 }} />
+              <LogoMark size={36} style={{ marginRight: 8 }} />
               <span style={{ fontFamily: 'Montserrat, Inter, sans-serif', fontWeight: 700, fontSize: 18, letterSpacing: '-0.04em', lineHeight: 1 }}>
                 <span className="text-[#0f2b50] dark:text-slate-100">Token</span><span style={{ color: '#1688e8' }}>sea</span>
               </span>

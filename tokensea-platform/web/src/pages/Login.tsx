@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next"
 import { useAuth } from "@/hooks/useAuth"
 import { Mail, Loader2, CheckCircle, AlertCircle, Send, ArrowLeft } from "lucide-react"
 import { ThemeToggle } from "@/components/ThemeToggle"
+import { AuthBrand } from "@/components/AuthBrand"
 import api from "@/lib/api"
 
 export function LoginPage() {
@@ -133,7 +134,7 @@ export function LoginPage() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#eef6ff] text-slate-950 dark:bg-[#050b14] dark:text-slate-100">
+    <div className="relative min-h-screen overflow-x-hidden bg-[#eef6ff] text-slate-950 dark:bg-[#050b14] dark:text-slate-100">
       {/* Background effects — light */}
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_15%,rgba(255,255,255,0.95)_0,rgba(255,255,255,0.7)_28%,rgba(219,235,255,0.58)_52%,rgba(128,184,255,0.45)_100%)] dark:hidden" />
       <div className="absolute -right-40 top-0 h-[620px] w-[760px] rounded-full bg-blue-300/30 blur-3xl dark:hidden" />
@@ -148,13 +149,8 @@ export function LoginPage() {
       <div className="absolute bottom-0 left-0 right-0 hidden h-52 bg-gradient-to-t from-blue-600/10 to-transparent dark:block" />
 
       {/* Header */}
-      <header className="relative z-10 flex items-center justify-between px-8 py-7">
-        <div className="flex items-center" style={{ gap: 0 }}>
-          <img src="/shared/logo.png" alt="TokenSea" className="dark:invert dark:hue-rotate-180" style={{ height: 92, width: 'auto', objectFit: 'contain', marginRight: -14 }} />
-          <span style={{ fontFamily: 'Montserrat, Inter, sans-serif', fontSize: 37, fontWeight: 700, letterSpacing: '-0.04em', lineHeight: 1 }}>
-            <span className="text-[#0f2b50] dark:text-slate-100">Token</span><span style={{ color: '#1688e8' }}>sea</span>
-          </span>
-        </div>
+      <header className="relative z-10 mx-auto flex max-w-[1380px] items-center justify-between px-6 py-5 sm:px-8 lg:px-10 lg:py-6">
+        <AuthBrand />
         <div className="flex items-center gap-2">
           <button
             onClick={() => i18n.changeLanguage(i18n.language === "en" ? "zh" : "en")}
@@ -171,9 +167,9 @@ export function LoginPage() {
       </header>
 
       {/* Main content */}
-      <main className="relative z-10 mx-auto grid min-h-[calc(100vh-260px)] max-w-[1180px] grid-cols-[1.05fr_0.95fr] items-center gap-20 px-8 pb-20">
+      <main className="relative z-10 mx-auto grid min-h-[calc(100svh-112px)] max-w-[1240px] grid-cols-1 items-center gap-12 px-6 pb-16 pt-3 sm:px-8 lg:grid-cols-[1fr_440px] lg:gap-20 lg:px-10 lg:pb-20">
         {/* Left: Marketing */}
-        <section className="pt-4">
+        <section className="hidden pt-4 lg:block">
           <p className="mb-5 inline-flex rounded-full border border-blue-200 bg-white/60 px-4 py-2 text-sm font-bold text-blue-700 shadow-sm backdrop-blur dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-400">
             {t("auth.badge", { defaultValue: "一个 Key，多模型随意切换" })}
           </p>
@@ -214,7 +210,7 @@ export function LoginPage() {
         </section>
 
         {/* Right: Login / Verify form */}
-        <section className="rounded-[28px] border border-white/70 bg-white/82 p-10 shadow-[0_30px_90px_rgba(37,99,235,0.16)] backdrop-blur-2xl dark:border-white/10 dark:bg-[#0f172a]/82">
+        <section className="w-full max-w-[440px] justify-self-center rounded-[28px] border border-white/80 bg-white/88 p-7 shadow-[0_30px_90px_rgba(37,99,235,0.16)] backdrop-blur-2xl sm:p-9 dark:border-blue-400/15 dark:bg-[#0d1729]/88 dark:shadow-[0_30px_90px_rgba(0,0,0,0.38)]">
           {mode === "login" ? (
             <>
               <div className="mb-9 text-center">
