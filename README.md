@@ -81,10 +81,10 @@ docker compose logs -f dario-1
 
 ```bash
 # 检查 dario 节点健康
-curl http://localhost:3456/healthz
+curl http://localhost:3456/health
 
 # 查看 Prometheus 指标
-curl http://localhost:3456/metricsz
+curl http://localhost:3456/metrics
 
 # 通过 CPA 发送请求
 curl -H "x-api-key: your-personal-key" \
@@ -108,13 +108,20 @@ curl -H "x-api-key: your-personal-key" \
 | `DARIO_OAUTH_SCOPES` | OAuth 权限范围（逗号分隔） | `user:inference` |
 | `DARIO_DEVICE_ID` | 设备 ID（来自 .claude.json 的 userID） | — |
 | `DARIO_ACCOUNT_UUID` | 账号 UUID | — |
-| `DARIO_ACCOUNT_ID` | 订阅标识（显示在 healthz 中，如 `sub-1`） | — |
+| `DARIO_ACCOUNT_ID` | 订阅标识（显示在 /health 中，如 `sub-1`） | — |
 | `DARIO_API_KEY` | 内部认证 Key | — |
 | `DARIO_HOST` | 监听地址 | `0.0.0.0` |
-| `DARIO_LISTEN_PORT` | 监听端口 | `3456` |
-| `DARIO_CC_VERSION` | CC 版本（容器内无 CC CLI 时使用） | `2.1.100` |
-| `DARIO_TEMPLATE_PATH` | 外部模板文件路径 | — |
-| `DARIO_NO_LIVE_CAPTURE` | 禁用实时指纹捕获（`1`=禁用） | `0` |
+| `DARIO_PORT` | 监听端口 | `3456` |
+| `DARIO_NO_LIVE_CAPTURE` | 禁用实时指纹捕获（`1`=禁用，使用打包模板） | `1` |
+
+### Codex/GPT 订阅（dario v6 单容器同时服务 Claude + Codex）
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `CODEX_DARIO_OAUTH_ACCESS_TOKEN` | Codex OAuth 访问令牌 | — |
+| `CODEX_DARIO_OAUTH_REFRESH_TOKEN` | Codex OAuth 刷新令牌 | — |
+| `CODEX_DARIO_OAUTH_EXPIRES_AT` | 令牌过期时间（毫秒时间戳） | `0` |
+| `CODEX_DARIO_ACCOUNT_ID` | Codex 订阅标识 | `codex-seat-1` |
 
 ## 端点
 
@@ -122,9 +129,10 @@ curl -H "x-api-key: your-personal-key" \
 
 | 端点 | 认证 | 说明 |
 |------|------|------|
-| `GET /healthz` | 无 | 健康检查（JSON） |
-| `GET /metricsz` | 无 | Prometheus 指标 |
-| `GET /health` | 无 | 简要健康状态 |
+| `GET /healthz` | 无 | 健康检查（JSON，v6 保留别名） |
+| `GET /health` | 无 | v6 简要健康状态 |
+| `GET /metrics` | 无 | v6 Prometheus 指标 |
+| `GET /metricsz` | 无 | Prometheus 指标（别名） |
 | `GET /status` | 需认证 | OAuth 状态详情 |
 | `POST /v1/messages` | 需认证 | Anthropic Messages API 代理 |
 | `POST /v1/chat/completions` | 需认证 | OpenAI 兼容格式代理 |
@@ -190,7 +198,7 @@ routing:
 ./scripts/doctor-all.sh
 
 # 查看单个节点指标
-curl http://localhost:3456/metricsz
+curl http://localhost:3456/metrics
 ```
 
 ## 部署到远程服务器

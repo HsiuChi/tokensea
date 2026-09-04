@@ -8,6 +8,10 @@ dist/
 capture/
 dario-modified/capture/
 
+# dario is now a fork clone (own .git) — see scripts/setup-dario.sh
+dario-modified/
+dario-modified.bak/
+
 # Environment files with secrets
 .env
 
