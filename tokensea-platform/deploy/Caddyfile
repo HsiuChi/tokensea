@@ -1,5 +1,14 @@
 {
-  email admin@xuexin.xyz
+  email admin@tokensea.dev
+}
+
+tokensea.dev, api.tokensea.dev {
+  encode gzip zstd
+  reverse_proxy app:3000
+}
+
+www.tokensea.dev {
+  redir https://tokensea.dev{uri} permanent
 }
 
 xuexin.xyz {

@@ -39,7 +39,7 @@ services:
       REDIS_URL: redis://redis:6379
       NODE_ENV: production
       PORT: 3000
-      FRONTEND_URL: https://xuexin.xyz
+      FRONTEND_URL: https://tokensea.dev
     depends_on:
       postgres:
         condition: service_healthy
