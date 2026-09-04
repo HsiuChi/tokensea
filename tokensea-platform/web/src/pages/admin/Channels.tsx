@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Plus, Trash2, Activity, Pencil, Search, ChevronDown, ChevronRight } from "lucide-react"
+import { Plus, Trash2, Activity, Pencil, Search, ChevronDown, ChevronRight, Zap } from "lucide-react"
 
 const CHANNEL_TYPES = [
   { value: "openai", label: "OpenAI Compatible" },
@@ -24,18 +24,20 @@ const CHANNEL_TYPES = [
 
 interface Channel {
   id: string; name: string; type: string; status: string; priority?: number; weight?: number
+  billingMultiplier?: number; retryPolicy?: any
   models?: string[]; nodes: any[]
 }
 
 interface ChannelForm {
   name: string; type: string; models: string; priority: string; weight: string
+  billingMultiplier: string; retryPolicy: string
 }
 
 interface NodeForm {
   name: string; internalUrl: string; apiKey: string; maxConcurrent: string
 }
 
-const emptyChannel: ChannelForm = { name: "", type: "openai", models: "", priority: "1", weight: "1" }
+const emptyChannel: ChannelForm = { name: "", type: "openai", models: "", priority: "1", weight: "1", billingMultiplier: "1", retryPolicy: "" }
 const emptyNode: NodeForm = { name: "", internalUrl: "", apiKey: "", maxConcurrent: "100" }
 
 export function AdminChannels() {
@@ -51,6 +53,7 @@ export function AdminChannels() {
   const [channelForm, setChannelForm] = useState<ChannelForm>({ ...emptyChannel })
   const [nodeForm, setNodeForm] = useState<NodeForm>({ ...emptyNode })
   const [healthChecking, setHealthChecking] = useState<string | null>(null)
+  const [testingChannel, setTestingChannel] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
   const fetch = useCallback(() => {
@@ -67,11 +70,29 @@ export function AdminChannels() {
     setExpanded((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next })
   }
 
+  const buildChannelBody = (): any | null => {
+    let retryPolicy: any = undefined
+    if (channelForm.retryPolicy.trim()) {
+      try { retryPolicy = JSON.parse(channelForm.retryPolicy) } catch {
+        alert(t("admin.channels.invalidRetryPolicy"))
+        return null
+      }
+    }
+    const body: any = {
+      name: channelForm.name, type: channelForm.type,
+      priority: Number(channelForm.priority), weight: Number(channelForm.weight),
+      billingMultiplier: Number(channelForm.billingMultiplier) || 1,
+    }
+    if (channelForm.models) body.models = channelForm.models.split(",").map((s) => s.trim()).filter(Boolean)
+    if (retryPolicy !== undefined) body.retryPolicy = retryPolicy
+    return body
+  }
+
   const handleCreate = async () => {
+    const body = buildChannelBody()
+    if (!body) return
     setSaving(true)
     try {
-      const body: any = { name: channelForm.name, type: channelForm.type, priority: Number(channelForm.priority), weight: Number(channelForm.weight) }
-      if (channelForm.models) body.models = channelForm.models.split(",").map((s) => s.trim()).filter(Boolean)
       await api.createChannel(body)
       setShowCreate(false); setChannelForm({ ...emptyChannel }); fetch()
     } catch (e: any) { alert(e.message) } finally { setSaving(false) }
@@ -79,10 +100,10 @@ export function AdminChannels() {
 
   const handleEdit = async () => {
     if (!editingId) return
+    const body = buildChannelBody()
+    if (!body) return
     setSaving(true)
     try {
-      const body: any = { name: channelForm.name, type: channelForm.type, priority: Number(channelForm.priority), weight: Number(channelForm.weight) }
-      if (channelForm.models) body.models = channelForm.models.split(",").map((s) => s.trim()).filter(Boolean)
       await api.updateChannel(editingId, body)
       setShowEdit(false); setEditingId(null); fetch()
     } catch (e: any) { alert(e.message) } finally { setSaving(false) }
@@ -93,8 +114,19 @@ export function AdminChannels() {
     setChannelForm({
       name: ch.name || "", type: ch.type || "openai",
       models: ch.models?.join(", ") || "", priority: String(ch.priority || 1), weight: String(ch.weight || 1),
+      billingMultiplier: String(ch.billingMultiplier ?? 1),
+      retryPolicy: ch.retryPolicy ? JSON.stringify(ch.retryPolicy, null, 2) : "",
     })
     setShowEdit(true)
+  }
+
+  const handleTestChannel = async (id: string) => {
+    setTestingChannel(id)
+    try {
+      const r = await api.testChannel(id)
+      alert(r?.ok ? `${t("admin.channels.testOk")} (${r.latencyMs ?? "?"}ms${r.model ? `, ${r.model}` : ""})` : `${t("admin.channels.testFail")}: ${r?.status ?? "?"} ${r?.error ?? r?.node ?? ""}`)
+    } catch (e: any) { alert(`${t("admin.channels.testFail")}: ${e.message}`) }
+    setTestingChannel(null)
   }
 
   const handleAddNode = async (channelId: string) => {
@@ -166,6 +198,21 @@ export function AdminChannels() {
               <div className="space-y-2"><Label>{t("admin.channels.priority")}</Label><Input type="number" value={channelForm.priority} onChange={(e) => setChannelForm({ ...channelForm, priority: e.target.value })} /></div>
               <div className="space-y-2"><Label>{t("admin.channels.weight")}</Label><Input type="number" value={channelForm.weight} onChange={(e) => setChannelForm({ ...channelForm, weight: e.target.value })} /></div>
             </div>
+            <div className="space-y-2">
+              <Label>{t("admin.channels.billingMultiplier")}</Label>
+              <Input type="number" step="0.01" min="0" value={channelForm.billingMultiplier} onChange={(e) => setChannelForm({ ...channelForm, billingMultiplier: e.target.value })} />
+              <p className="text-xs text-muted-foreground">{t("admin.channels.billingMultiplierHint")}</p>
+            </div>
+            <div className="space-y-2">
+              <Label>{t("admin.channels.retryPolicy")}</Label>
+              <textarea
+                className="flex min-h-[120px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-xs font-mono"
+                value={channelForm.retryPolicy}
+                onChange={(e) => setChannelForm({ ...channelForm, retryPolicy: e.target.value })}
+                placeholder='{"rules":[{"status":429,"action":"continue-and-cooldown"},{"status":500,"match":["overloaded"],"action":"continue"}]}'
+              />
+              <p className="text-xs text-muted-foreground">{t("admin.channels.retryPolicyHint")}</p>
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => { setShowCreate(false); setShowEdit(false); setEditingId(null) }}>{t("common.cancel")}</Button>
@@ -216,6 +263,9 @@ export function AdminChannels() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
+                      <Button size="sm" variant="outline" disabled={testingChannel === ch.id} onClick={() => handleTestChannel(ch.id)}>
+                        <Zap className="mr-1 h-3 w-3" /> {testingChannel === ch.id ? "..." : t("admin.channels.testChannel")}
+                      </Button>
                       <Button size="sm" variant="ghost" onClick={() => openEdit(ch)}><Pencil className="h-3.5 w-3.5" /></Button>
                       <Button size="sm" variant="outline" onClick={() => { setNodeForm({ ...emptyNode }); setAddNodeTo(ch.id) }}>
                         <Plus className="mr-1 h-3 w-3" /> {t("admin.channels.addNode")}
@@ -227,8 +277,9 @@ export function AdminChannels() {
                 {isExpanded && (
                   <CardContent>
                     <div className="mb-3 text-xs text-muted-foreground">
-                      {t("admin.channels.priority")}: {ch.priority} · {t("admin.channels.weight")}: {ch.weight}
+                      {t("admin.channels.priority")}: {ch.priority} · {t("admin.channels.weight")}: {ch.weight} · {t("admin.channels.billingMultiplier")}: ×{ch.billingMultiplier ?? 1}
                       {(ch.models?.length ?? 0) > 0 && <> · {t("admin.channels.models")}: {ch.models!.join(", ")}</>}
+                      {ch.retryPolicy?.rules?.length > 0 && <> · {t("admin.channels.retryPolicy")}: {ch.retryPolicy.rules.length} rules</>}
                     </div>
                     {ch.nodes?.length > 0 ? (
                       <Table>

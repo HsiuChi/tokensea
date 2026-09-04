@@ -81,6 +81,14 @@ export const api = {
   addNode: (channelId: string, body: any) => request<any>(`/api/channel/${channelId}/nodes`, { method: "POST", body: JSON.stringify(body) }),
   deleteNode: (nodeId: string) => request<any>(`/api/channel/nodes/${nodeId}`, { method: "DELETE" }),
   healthCheckNode: (nodeId: string) => request<any>(`/api/channel/nodes/${nodeId}/health`, { method: "POST" }),
+  testChannel: (id: string, model?: string) => request<any>(`/api/channel/${id}/test`, { method: "POST", body: JSON.stringify(model ? { model } : {}) }),
+  testNode: (channelId: string, nodeId: string, model?: string) => request<any>(`/api/channel/${channelId}/nodes/${nodeId}/test`, { method: "POST", body: JSON.stringify(model ? { model } : {}) }),
+
+  // Key groups
+  listKeyGroups: (page = 1) => request<any>(`/api/keygroup/?page=${page}`),
+  createKeyGroup: (body: any) => request<any>("/api/keygroup/", { method: "POST", body: JSON.stringify(body) }),
+  updateKeyGroup: (id: string, body: any) => request<any>(`/api/keygroup/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteKeyGroup: (id: string) => request<any>(`/api/keygroup/${id}`, { method: "DELETE" }),
 
   // Redemptions
   listRedemptions: (page = 1) => request<any>(`/api/redemption/?page=${page}`),

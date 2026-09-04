@@ -1,5 +1,12 @@
 import type { PrismaClient } from "@prisma/client";
-import { notFound } from "../../lib/errors.js";
+import { badRequest, notFound } from "../../lib/errors.js";
+
+function mapPrismaError(e: unknown): never {
+  const err = e as { code?: string };
+  if (err.code === "P2002") throw badRequest("Group name already exists");
+  if (err.code === "P2025") throw notFound("Key group not found");
+  throw e;
+}
 
 export class KeyGroupService {
   constructor(private prisma: PrismaClient) {}
@@ -28,22 +35,28 @@ export class KeyGroupService {
   }
 
   async create(data: { name: string; userId: bigint; models?: string[]; quota?: bigint; priority?: number }) {
-    return this.prisma.keyGroup.create({ data: {
-      name: data.name, userId: data.userId,
-      models: data.models ?? undefined,
-      quota: data.quota ?? -1n,
-      priority: data.priority ?? 0,
-    }});
+    try {
+      return await this.prisma.keyGroup.create({ data: {
+        name: data.name, userId: data.userId,
+        models: data.models ?? undefined,
+        quota: data.quota ?? -1n,
+        priority: data.priority ?? 0,
+      }});
+    } catch (e) { mapPrismaError(e); }
   }
 
   async update(id: bigint, data: Record<string, any>) {
-    return this.prisma.keyGroup.update({ where: { id }, data });
+    try {
+      return await this.prisma.keyGroup.update({ where: { id }, data });
+    } catch (e) { mapPrismaError(e); }
   }
 
   async delete(id: bigint) {
     // unlink keys first
     await this.prisma.apiKey.updateMany({ where: { keyGroupId: id }, data: { keyGroupId: null } });
-    return this.prisma.keyGroup.delete({ where: { id } });
+    try {
+      return await this.prisma.keyGroup.delete({ where: { id } });
+    } catch (e) { mapPrismaError(e); }
   }
 
   /** Decrement group quota atomically; returns true if enough quota. */

@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DollarSign } from "lucide-react";
 
 interface Route {
   id: string;
@@ -24,7 +25,18 @@ interface Model {
   description: string;
   inputPrice: number;
   outputPrice: number;
+  cacheWrite5mPrice?: number;
+  cacheWrite1hPrice?: number;
+  cacheReadPrice?: number;
   routes: Route[];
+}
+
+interface PriceForm {
+  inputPrice: string;
+  outputPrice: string;
+  cacheWrite5mPrice: string;
+  cacheWrite1hPrice: string;
+  cacheReadPrice: string;
 }
 
 interface ModelForm {
@@ -52,6 +64,7 @@ interface RouteForm {
 
 const emptyModelForm: ModelForm = { alias: "", displayName: "", provider: "anthropic", description: "", category: "chat", tags: "", inputPrice: "", outputPrice: "", supportsStream: true, supportsTools: true, supportsVision: false, maxContext: "200000", sortOrder: "0" };
 const emptyRouteForm: RouteForm = { channelId: "", upstreamModel: "", weight: "1", priority: "0" };
+const emptyPriceForm: PriceForm = { inputPrice: "", outputPrice: "", cacheWrite5mPrice: "", cacheWrite1hPrice: "", cacheReadPrice: "" };
 
 export function AdminModels() {
   const { t } = useTranslation();
@@ -59,6 +72,9 @@ export function AdminModels() {
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [showRoute, setShowRoute] = useState<string | null>(null);
+  const [priceModel, setPriceModel] = useState<Model | null>(null);
+  const [priceForm, setPriceForm] = useState<PriceForm>({ ...emptyPriceForm });
+  const [savingPrice, setSavingPrice] = useState(false);
   const [modelForm, setModelForm] = useState<ModelForm>({ ...emptyModelForm });
   const [routeForm, setRouteForm] = useState<RouteForm>({ ...emptyRouteForm });
 
@@ -103,6 +119,37 @@ export function AdminModels() {
     setShowRoute(null);
     setRouteForm({ ...emptyRouteForm });
     fetch();
+  };
+
+  const openPrice = (m: Model) => {
+    setPriceModel(m);
+    setPriceForm({
+      inputPrice: String(m.inputPrice ?? 0),
+      outputPrice: String(m.outputPrice ?? 0),
+      cacheWrite5mPrice: String(m.cacheWrite5mPrice ?? 0),
+      cacheWrite1hPrice: String(m.cacheWrite1hPrice ?? 0),
+      cacheReadPrice: String(m.cacheReadPrice ?? 0),
+    });
+  };
+
+  const handleSavePrice = async () => {
+    if (!priceModel) return;
+    setSavingPrice(true);
+    try {
+      await api.updateModel(priceModel.id, {
+        inputPrice: Number(priceForm.inputPrice) || 0,
+        outputPrice: Number(priceForm.outputPrice) || 0,
+        cacheWrite5mPrice: Number(priceForm.cacheWrite5mPrice) || 0,
+        cacheWrite1hPrice: Number(priceForm.cacheWrite1hPrice) || 0,
+        cacheReadPrice: Number(priceForm.cacheReadPrice) || 0,
+      });
+      setPriceModel(null);
+      fetch();
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setSavingPrice(false);
+    }
   };
 
   const handleDeleteRoute = async (id: string) => {
@@ -248,6 +295,45 @@ export function AdminModels() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={priceModel !== null} onOpenChange={(open) => { if (!open) setPriceModel(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("admin.models.editPrice")} — <span className="font-mono">{priceModel?.alias}</span></DialogTitle>
+            <DialogDescription>{t("admin.models.editPriceDesc")}</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label>{t("admin.models.inputPrice")}</Label>
+                <Input type="number" step="0.0001" value={priceForm.inputPrice} onChange={(e) => setPriceForm({ ...priceForm, inputPrice: e.target.value })} />
+              </div>
+              <div className="grid gap-2">
+                <Label>{t("admin.models.outputPrice")}</Label>
+                <Input type="number" step="0.0001" value={priceForm.outputPrice} onChange={(e) => setPriceForm({ ...priceForm, outputPrice: e.target.value })} />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="grid gap-2">
+                <Label>{t("admin.models.cacheWrite5mPrice")}</Label>
+                <Input type="number" step="0.0001" value={priceForm.cacheWrite5mPrice} onChange={(e) => setPriceForm({ ...priceForm, cacheWrite5mPrice: e.target.value })} />
+              </div>
+              <div className="grid gap-2">
+                <Label>{t("admin.models.cacheWrite1hPrice")}</Label>
+                <Input type="number" step="0.0001" value={priceForm.cacheWrite1hPrice} onChange={(e) => setPriceForm({ ...priceForm, cacheWrite1hPrice: e.target.value })} />
+              </div>
+              <div className="grid gap-2">
+                <Label>{t("admin.models.cacheReadPrice")}</Label>
+                <Input type="number" step="0.0001" value={priceForm.cacheReadPrice} onChange={(e) => setPriceForm({ ...priceForm, cacheReadPrice: e.target.value })} />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPriceModel(null)}>{t("common.cancel")}</Button>
+            <Button onClick={handleSavePrice} disabled={savingPrice}>{savingPrice ? t("common.loading") : t("common.save")}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {loading ? (
         <div className="space-y-4">
           {Array.from({ length: 3 }).map((_, i) => (
@@ -269,7 +355,11 @@ export function AdminModels() {
                   <div className="flex items-center gap-3">
                     <span className="text-xs text-muted-foreground">
                       In: {formatQuota(m.inputPrice)} · Out: {formatQuota(m.outputPrice)}
+                      {m.cacheReadPrice ? ` · Cache R: ${formatQuota(m.cacheReadPrice)}` : ""}
                     </span>
+                    <Button size="sm" variant="outline" onClick={() => openPrice(m)}>
+                      <DollarSign className="mr-1 h-3.5 w-3.5" /> {t("admin.models.editPrice")}
+                    </Button>
                     <Button size="sm" variant="outline" onClick={() => { setRouteForm({ ...emptyRouteForm }); setShowRoute(m.id); }}>
                       {t("admin.models.addRoute")}
                     </Button>
