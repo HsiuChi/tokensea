@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
+import { VChart } from "@visactor/react-vchart";
 
 interface GlobalStats {
   totalUsers: number;
@@ -16,6 +17,9 @@ interface GlobalStats {
   todayRequests: number;
   totalRevenue: number;
   nodes: { id: string; name: string; channel: string; status: string; currentLoad: number; maxConcurrent: number }[];
+  byModel?: { model: string; requests: number; inputTokens: number; outputTokens: number; billableUnits: string }[];
+  byChannel?: { channelId: string; channel: string; requests: number; inputTokens: number; outputTokens: number; billableUnits: string }[];
+  byDay?: { date: string; requests: number; billableUnits: string; inputTokens: number; outputTokens: number }[];
 }
 
 export function AdminDashboard() {
@@ -115,6 +119,62 @@ export function AdminDashboard() {
           )}
         </CardContent>
       </Card>
+
+      {/* Charts: by model / by channel / by day */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        {stats.byModel && stats.byModel.length > 0 && (
+          <Card>
+            <CardHeader><CardTitle>{t("admin.dashboard.byModel") || "Requests by Model"}</CardTitle></CardHeader>
+            <CardContent>
+              <VChart
+                spec={{
+                  type: "pie",
+                  data: [{ values: stats.byModel.map((m) => ({ name: m.model, value: m.requests })) }],
+                  valueField: "value", categoryField: "name",
+                  label: { visible: true },
+                  legends: { visible: true, orient: "right" },
+                  tooltip: { visible: true },
+                  height: 280,
+                }}
+              />
+            </CardContent>
+          </Card>
+        )}
+        {stats.byChannel && stats.byChannel.length > 0 && (
+          <Card>
+            <CardHeader><CardTitle>{t("admin.dashboard.byChannel") || "Cost by Channel"}</CardTitle></CardHeader>
+            <CardContent>
+              <VChart
+                spec={{
+                  type: "bar",
+                  data: [{ values: stats.byChannel.map((c) => ({ name: c.channel, cost: Number(c.billableUnits) / 1_000_000 })) }],
+                  xField: "name", yField: "cost",
+                  label: { visible: true },
+                  tooltip: { visible: true },
+                  height: 280,
+                }}
+              />
+            </CardContent>
+          </Card>
+        )}
+        {stats.byDay && stats.byDay.length > 0 && (
+          <Card className="lg:col-span-2">
+            <CardHeader><CardTitle>{t("admin.dashboard.trend") || "Daily Request Trend"}</CardTitle></CardHeader>
+            <CardContent>
+              <VChart
+                spec={{
+                  type: "line",
+                  data: [{ values: stats.byDay.map((d) => ({ date: d.date, requests: d.requests })) }],
+                  xField: "date", yField: "requests",
+                  point: { visible: true },
+                  tooltip: { visible: true },
+                  height: 280,
+                }}
+              />
+            </CardContent>
+          </Card>
+        )}
+      </div>
     </div>
   );
 }

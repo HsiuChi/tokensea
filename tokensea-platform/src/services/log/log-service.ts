@@ -180,6 +180,50 @@ export class LogService {
     const totalRevenue = await this.prisma.usageLedger.aggregate({ _sum: { billableUnits: true } });
     const nodes = await this.prisma.channelNode.findMany({ include: { channel: true } });
 
+    // Aggregations by model and channel (last 30 days)
+    const since = new Date(Date.now() - 30 * 86400_000);
+    const byModel = await this.prisma.requestLog.groupBy({
+      by: ["requestedModel"],
+      where: { startedAt: { gte: since }, status: "succeeded" },
+      _sum: { inputTokens: true, outputTokens: true, billableUnits: true },
+      _count: true,
+      orderBy: { _sum: { billableUnits: "desc" } },
+      take: 20,
+    });
+    const byChannel = await this.prisma.requestLog.groupBy({
+      by: ["channelId"],
+      where: { startedAt: { gte: since }, status: "succeeded", channelId: { not: null } },
+      _sum: { inputTokens: true, outputTokens: true, billableUnits: true },
+      _count: true,
+      orderBy: { _sum: { billableUnits: "desc" } },
+      take: 20,
+    });
+    // resolve channel names
+    const channelIds = byChannel.map((b) => b.channelId!).filter(Boolean);
+    const channels = channelIds.length > 0
+      ? await this.prisma.channel.findMany({ where: { id: { in: channelIds } } })
+      : [];
+    const channelMap = new Map(channels.map((c) => [c.id.toString(), c.name]));
+
+    // Daily trend (last 14 days)
+    const trendRows = await this.prisma.requestLog.groupBy({
+      by: ["startedAt"],
+      where: { startedAt: { gte: new Date(Date.now() - 14 * 86400_000) }, status: "succeeded" },
+      _sum: { billableUnits: true, inputTokens: true, outputTokens: true },
+      _count: true,
+    });
+    // bucket by day
+    const byDay = new Map<string, { date: string; requests: number; billableUnits: bigint; inputTokens: number; outputTokens: number }>();
+    for (const r of trendRows) {
+      const day = r.startedAt.toISOString().slice(0, 10);
+      const prev = byDay.get(day) ?? { date: day, requests: 0, billableUnits: 0n, inputTokens: 0, outputTokens: 0 };
+      prev.requests += r._count;
+      prev.billableUnits += r._sum.billableUnits ?? 0n;
+      prev.inputTokens += r._sum.inputTokens ?? 0;
+      prev.outputTokens += r._sum.outputTokens ?? 0;
+      byDay.set(day, prev);
+    }
+
     return {
       totalUsers, activeUsers, totalKeys, activeKeys,
       totalRequests, todayRequests,
@@ -187,6 +231,19 @@ export class LogService {
       nodes: nodes.map(n => ({
         id: n.id.toString(), name: n.name, channel: n.channel.name,
         status: n.status, currentLoad: n.currentLoad, maxConcurrent: n.maxConcurrent,
+      })),
+      byModel: byModel.map((b) => ({
+        model: b.requestedModel, requests: b._count,
+        inputTokens: b._sum.inputTokens ?? 0, outputTokens: b._sum.outputTokens ?? 0,
+        billableUnits: (b._sum.billableUnits ?? 0n).toString(),
+      })),
+      byChannel: byChannel.map((b) => ({
+        channelId: b.channelId?.toString() ?? "", channel: channelMap.get(b.channelId?.toString() ?? "") ?? "unknown",
+        requests: b._count, inputTokens: b._sum.inputTokens ?? 0, outputTokens: b._sum.outputTokens ?? 0,
+        billableUnits: (b._sum.billableUnits ?? 0n).toString(),
+      })),
+      byDay: [...byDay.values()].sort((a, b) => a.date < b.date ? -1 : 1).map((d) => ({
+        ...d, billableUnits: d.billableUnits.toString(),
       })),
     };
   }
