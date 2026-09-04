@@ -87,4 +87,64 @@ export class ChannelService {
       return { healthy: false, error: err.message };
     }
   }
+
+  /**
+   * One-click channel test: pick a healthy node in the channel, send a tiny
+   * probe request with x-tokensea-probe:1 (relay skips billing/quota).
+   */
+  async testChannel(channelId: bigint, model?: string) {
+    const channel = await this.prisma.channel.findUnique({
+      where: { id: channelId },
+      include: { nodes: { where: { status: "healthy" }, take: 1 } },
+    });
+    if (!channel) throw notFound("Channel not found");
+    const node = channel.nodes[0];
+    if (!node) return { ok: false, error: "no healthy node" };
+    return this._probeNode(node, model ?? channel.testModel ?? (channel.models as string[])[0] ?? "gpt-5.5");
+  }
+
+  /**
+   * Node-level test: force use this specific node regardless of status.
+   */
+  async testNode(channelId: bigint, nodeId: bigint, model?: string) {
+    const node = await this.prisma.channelNode.findFirst({
+      where: { id: nodeId, channelId },
+    });
+    if (!node) throw notFound("Node not found");
+    const ch = await this.prisma.channel.findUnique({ where: { id: channelId } });
+    return this._probeNode(node, model ?? ch?.testModel ?? ((ch?.models as string[]) ?? [])[0] ?? "gpt-5.5");
+  }
+
+  private async _probeNode(node: any, model: string) {
+    const start = Date.now();
+    try {
+      const res = await fetch(`${node.internalUrl}/v1/chat/completions`, {
+        method: "POST",
+        signal: AbortSignal.timeout(30_000),
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": node.internalApiKey,
+          "x-tokensea-probe": "1",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: "ping" }],
+          max_tokens: 5,
+          stream: false,
+        }),
+      });
+      const latency = Date.now() - start;
+      const body = await res.json().catch(() => null);
+      return {
+        ok: res.ok,
+        latencyMs: latency,
+        status: res.status,
+        modelEcho: body?.model ?? null,
+        node: node.name,
+        error: res.ok ? undefined : (body?.error?.message ?? `HTTP ${res.status}`),
+      };
+    } catch (err: any) {
+      return { ok: false, latencyMs: Date.now() - start, error: err.message, node: node.name };
+    }
+  }
 }

@@ -5,6 +5,7 @@ import { userRoutes } from "./user.js";
 import { relayRoutes } from "./relay.js";
 import { planRoutes } from "./plan.js";
 import { channelRoutes } from "./channel.js";
+import { keyGroupRoutes } from "./keygroup.js";
 import { redemptionRoutes } from "./redemption.js";
 import { logRoutes } from "./log.js";
 import { adminRoutes } from "./admin.js";
@@ -32,6 +33,9 @@ export async function registerRoutes(app: FastifyInstance) {
 
   // Channels (admin)
   await app.register(channelRoutes, { prefix: "/api/channel" });
+
+  // Key groups (admin)
+  await app.register(keyGroupRoutes, { prefix: "/api/keygroup" });
 
   // Redemptions
   await app.register(redemptionRoutes, { prefix: "/api/redemption" });

@@ -68,4 +68,18 @@ export async function channelRoutes(app: FastifyInstance) {
     const { nodeId } = z.object({ nodeId: z.coerce.bigint() }).parse(request.params);
     return { data: await channelService.healthCheck(nodeId) };
   });
+
+  // One-click channel test (picks a healthy node, sends a tiny probe)
+  app.post("/:id/test", { preHandler: adminAuthHook }, async (request) => {
+    const { id } = z.object({ id: z.coerce.bigint() }).parse(request.params);
+    const body = z.object({ model: z.string().optional() }).parse(request.body ?? {});
+    return { data: await channelService.testChannel(id, body.model) };
+  });
+
+  // Node-level test (force use this node regardless of status)
+  app.post("/:id/nodes/:nodeId/test", { preHandler: adminAuthHook }, async (request) => {
+    const { id, nodeId } = z.object({ id: z.coerce.bigint(), nodeId: z.coerce.bigint() }).parse(request.params);
+    const body = z.object({ model: z.string().optional() }).parse(request.body ?? {});
+    return { data: await channelService.testNode(id, nodeId, body.model) };
+  });
 }

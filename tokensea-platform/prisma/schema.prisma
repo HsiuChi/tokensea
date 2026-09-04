@@ -143,6 +143,7 @@ model User {
   updatedAt       DateTime     @updatedAt
 
   apiKeys         ApiKey[]
+  keyGroups       KeyGroup[]
   bindings        UserPlanBinding[]
   requestLogs     RequestLog[]
   usageLedgers    UsageLedger[]
@@ -210,6 +211,7 @@ model UserPlanBinding {
 model ApiKey {
   id              BigInt       @id @default(autoincrement())
   userId          BigInt
+  keyGroupId      BigInt?
   keyPrefix       String       @db.VarChar(12)
   keyHash         String       @unique @db.VarChar(64)
   keyPlain        String?      @db.VarChar(128)
@@ -230,13 +232,34 @@ model ApiKey {
   updatedAt       DateTime     @updatedAt
 
   user            User         @relation(fields: [userId], references: [id])
+  keyGroup        KeyGroup?    @relation(fields: [keyGroupId], references: [id])
   plan            Plan?        @relation(fields: [planId], references: [id])
   requestLogs     RequestLog[]
   usageLedgers    UsageLedger[]
 
   @@index([userId, status])
+  @@index([keyGroupId])
   @@index([keyHash])
   @@map("api_keys")
+}
+
+model KeyGroup {
+  id              BigInt       @id @default(autoincrement())
+  name            String       @unique @db.VarChar(64)
+  userId          BigInt
+  models          Json?
+  quota           BigInt       @default(-1)
+  usedQuota       BigInt       @default(0)
+  priority        Int          @default(0)
+  status          ApiKeyStatus @default(active)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  user            User         @relation(fields: [userId], references: [id])
+  apiKeys         ApiKey[]
+
+  @@index([userId, status])
+  @@map("key_groups")
 }
 
 model ModelAlias {
@@ -286,50 +309,59 @@ model ModelRoute {
 }
 
 model Channel {
-  id              BigInt        @id @default(autoincrement())
-  name            String        @db.VarChar(64)
-  type            ChannelType
-  status          ChannelStatus @default(active)
-  cpaUpstreamKey  String?       @db.VarChar(64)
-  baseUrl         String?       @db.VarChar(512)
-  models          Json
-  priority        Int           @default(0)
-  weight          Int           @default(1)
-  testModel       String?       @db.VarChar(64)
-  lastTestAt      DateTime?
-  lastTestLatency Int?
-  totalRequests   BigInt        @default(0)
-  failedRequests  BigInt        @default(0)
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  id               BigInt        @id @default(autoincrement())
+  name             String        @db.VarChar(64)
+  type             ChannelType
+  status           ChannelStatus @default(active)
+  cpaUpstreamKey   String?       @db.VarChar(64)
+  baseUrl          String?       @db.VarChar(512)
+  models           Json
+  priority         Int           @default(0)
+  weight           Int           @default(1)
+  billingMultiplier Float         @default(1.0)
+  retryPolicy      Json?
+  probeEnabled     Boolean       @default(true)
+  testModel        String?       @db.VarChar(64)
+  lastTestAt       DateTime?
+  lastTestLatency  Int?
+  totalRequests    BigInt        @default(0)
+  failedRequests   BigInt        @default(0)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
 
-  nodes           ChannelNode[]
-  routes          ModelRoute[]
+  nodes            ChannelNode[]
+  routes           ModelRoute[]
+  usageLedgers     UsageLedger[]
 
   @@index([status, priority])
   @@map("channels")
 }
 
 model ChannelNode {
-  id              BigInt       @id @default(autoincrement())
-  channelId       BigInt
-  name            String       @db.VarChar(64)
-  internalUrl     String       @db.VarChar(256)
-  internalApiKey  String       @db.VarChar(128)
-  status          NodeStatus   @default(healthy)
-  accountId       String?      @db.VarChar(64)
-  oauthExpiresAt  DateTime?
-  maxConcurrent   Int          @default(5)
-  currentLoad     Int          @default(0)
-  totalRequests   BigInt       @default(0)
-  failedRequests  BigInt       @default(0)
-  last429At       DateTime?
-  lastHealthCheck DateTime?
-  healthStatus    Json?
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  id                   BigInt       @id @default(autoincrement())
+  channelId            BigInt
+  name                 String       @db.VarChar(64)
+  internalUrl          String       @db.VarChar(256)
+  internalApiKey       String       @db.VarChar(128)
+  status               NodeStatus   @default(healthy)
+  accountId            String?      @db.VarChar(64)
+  oauthExpiresAt       DateTime?
+  maxConcurrent        Int          @default(5)
+  currentLoad          Int          @default(0)
+  totalRequests        BigInt       @default(0)
+  failedRequests       BigInt       @default(0)
+  last429At            DateTime?
+  lastHealthCheck      DateTime?
+  healthStatus         Json?
+  probePath            String?      @db.VarChar(64)
+  probeTimeoutMs       Int          @default(5000)
+  probeLatency         Int?
+  consecutiveFails     Int          @default(0)
+  consecutiveSuccesses Int          @default(0)
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
 
-  channel         Channel      @relation(fields: [channelId], references: [id])
+  channel              Channel      @relation(fields: [channelId], references: [id])
 
   @@index([channelId, status])
   @@map("channel_nodes")
@@ -373,6 +405,7 @@ model UsageLedger {
   requestId           String           @db.VarChar(36)
   userId              BigInt
   apiKeyId            BigInt
+  channelId           BigInt?
   billingPeriod       String           @db.VarChar(8)
   billedRequests      Int              @default(1)
   inputTokens         Int              @default(0)
@@ -380,15 +413,19 @@ model UsageLedger {
   cacheCreationTokens Int              @default(0)
   cacheReadTokens     Int              @default(0)
   billableUnits       BigInt           @default(0)
+  cost                Float            @default(0)
+  billingMultiplier   Float            @default(1.0)
   settlementStatus    SettlementStatus @default(final)
   createdAt           DateTime         @default(now())
 
   user                User             @relation(fields: [userId], references: [id])
   apiKey              ApiKey           @relation(fields: [apiKeyId], references: [id])
+  channel             Channel?         @relation(fields: [channelId], references: [id])
 
   @@unique([requestId, settlementStatus])
   @@index([userId, billingPeriod])
   @@index([apiKeyId, billingPeriod])
+  @@index([channelId, billingPeriod])
   @@map("usage_ledgers")
 }
 

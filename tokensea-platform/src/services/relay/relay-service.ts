@@ -8,6 +8,7 @@ import { redisKeys } from "../../lib/redis-keys.js";
 import { unauthorized, forbidden, rateLimited, internalError, badRequest } from "../../lib/errors.js";
 import { SensitiveWordService } from "../sensitive/sensitive-service.js";
 import { v4 as uuid } from "uuid";
+import { selectChannel, channelsWithHealthyNodes } from "./channel-selection.js";
 
 interface RelayContext {
   requestId: string;
@@ -15,11 +16,13 @@ interface RelayContext {
   model: string;
   upstreamModel: string;
   channelId: bigint;
+  channelBillingMultiplier: number;
   nodeId: bigint;
   nodeUrl: string;
   nodeApiKey: string;
   startedAt: Date;
   protocol: "anthropic" | "openai";
+  isProbe?: boolean;
 }
 
 interface UsageInfo {
@@ -36,7 +39,7 @@ interface UsageInfo {
 
 const PARTITION_WIDTH = 2;
 const NODE_HEALTH_TTL_S = 30; // Redis TTL for node health cache
-const CROSS_NODE_MAX_RETRIES = 3; // Max node-level 429 retries
+const CROSS_CHANNEL_MAX_RETRIES = 3; // Max channel-level retries within a single request
 
 interface NodeHealth {
   avgHeadroom: number; // 0–100, average across all accounts on the node
@@ -77,6 +80,14 @@ export class RelayService {
     const startedAt = new Date();
     const requestId = uuid();
 
+    // Probe requests (x-tokensea-probe: 1) bypass billing/quota/rate-limit/sensitive
+    // and skip settlement, but still go through channel selection + forwarding
+    // so the test exercises the real relay path. Auth is still required unless
+    // the caller is the internal channel-test service (which uses the node key
+    // directly and does NOT hit this relay path — so any probe reaching here
+    // is a user-style probe and must still auth, just not bill).
+    const isProbe = request.headers["x-tokensea-probe"] === "1";
+
     // ① Auth — accept API key (tsk-*) or JWT (Playground)
     const apiKey = await this.resolveApiKey(request);
 
@@ -90,44 +101,63 @@ export class RelayService {
     const requestedModel = body.model ?? (request.query as any).model;
     if (!requestedModel) throw forbidden("Model is required");
 
+    // Model whitelist: key-level overrides group-level; both empty = all allowed.
     const keyModels = apiKey.models as string[] | null;
-    if (keyModels && keyModels.length > 0 && !keyModels.includes(requestedModel)) {
+    const groupModels = apiKey.keyGroup?.models as string[] | null;
+    const effectiveModels = (keyModels && keyModels.length > 0)
+      ? keyModels
+      : (groupModels && groupModels.length > 0 ? groupModels : null);
+    if (effectiveModels && !effectiveModels.includes(requestedModel)) {
       throw forbidden(`Model ${requestedModel} not allowed on this key`);
     }
 
-    // ③ Quota checks (Redis)
-    await this.checkQuota(apiKey);
+    // ③ Quota checks (Redis) — skipped for probe requests
+    if (!isProbe) await this.checkQuota(apiKey);
 
-    // ④ Rate limit checks (Redis) — defaults if no plan
+    // ④ Rate limit checks (Redis) — defaults if no plan; skipped for probe
     const plan = apiKey.plan;
-    await this.checkRateLimit(apiKey.userId, plan);
+    if (!isProbe) await this.checkRateLimit(apiKey.userId, plan);
 
-    // ⑤½ Sensitive word filtering
-    const contentText = this.extractContentText(body);
-    if (contentText) {
-      const sensitiveService = new SensitiveWordService(this.prisma, this.redis);
-      const check = await sensitiveService.checkContent(contentText);
-      if (check.blocked) {
-        throw badRequest(`Content contains prohibited content`);
-      }
-      if (check.action === "replace") {
-        this.sanitizeContentText(body, sensitiveService);
+    // ⑤½ Sensitive word filtering — skipped for probe
+    if (!isProbe) {
+      const contentText = this.extractContentText(body);
+      if (contentText) {
+        const sensitiveService = new SensitiveWordService(this.prisma, this.redis);
+        const check = await sensitiveService.checkContent(contentText);
+        if (check.blocked) {
+          throw badRequest(`Content contains prohibited content`);
+        }
+        if (check.action === "replace") {
+          this.sanitizeContentText(body, sensitiveService);
+        }
       }
     }
 
-    // ⑥ Route to node (with cross-node 429 failover)
+    // ⑥ Route to channel + node (priority-tiered, weight-weighted, cross-channel failover)
     const { alias, routes } = await this.resolveRoute(requestedModel);
-    const allNodes = await this.getHealthyNodes(routes);
+
+    // Load all channels touched by these routes, plus their healthy nodes.
+    const channels = await this.resolveChannels(routes);
+    if (channels.length === 0) throw internalError("No available upstream channels");
+
+    // Fetch healthy nodes (status=healthy, not in Redis cooldown) across all routes' channels.
+    const allNodes = await this.getHealthyNodesForChannels(channels.map((c) => c.id));
     if (allNodes.length === 0) throw internalError("No available upstream nodes");
 
-    // Cross-node failover loop
+    const healthyChannelIds = channelsWithHealthyNodes(allNodes);
+    const triedChannelIds = new Set<string>();
     const triedNodeIds = new Set<string>();
     let lastError: any;
 
-    for (let attempt = 0; attempt < Math.min(allNodes.length, CROSS_NODE_MAX_RETRIES); attempt++) {
-      const node = this.selectNodeWithPartition(apiKey.userId, allNodes, triedNodeIds);
-      if (!node) break;
+    for (let attempt = 0; attempt < CROSS_CHANNEL_MAX_RETRIES; attempt++) {
+      const channel = selectChannel(channels, healthyChannelIds, triedChannelIds);
+      if (!channel) break;
+      triedChannelIds.add(channel.id.toString());
 
+      // Nodes for this channel
+      const channelNodes = allNodes.filter((n) => n.channelId === channel.id && !triedNodeIds.has(n.id.toString()));
+      const node = this.selectNodeWithPartition(apiKey.userId, channelNodes, triedNodeIds);
+      if (!node) continue; // channel has no usable node → try next channel
       triedNodeIds.add(node.id.toString());
 
       const isAnthropicEndpoint = request.url.startsWith("/v1/messages");
@@ -135,8 +165,10 @@ export class RelayService {
         requestId,
         apiKey: apiKey as any,
         model: requestedModel,
-        upstreamModel: routes[0]?.upstreamModel ?? requestedModel,
-        channelId: node.channelId,
+        upstreamModel: routes.find((r: any) => r.channelId === channel.id)?.upstreamModel ?? requestedModel,
+        channelId: channel.id,
+        channelBillingMultiplier: channel.billingMultiplier ?? 1.0,
+        isProbe,
         nodeId: node.id,
         nodeUrl: node.internalUrl,
         nodeApiKey: node.internalApiKey,
@@ -179,21 +211,28 @@ export class RelayService {
         return; // Success — exit failover loop
       } catch (err: any) {
         lastError = err;
-        // If 429, try next node; otherwise throw immediately
-        if (err?.statusCode !== 429 && err?.statusCode !== 503) {
-          request.log.error({ err, requestId }, "Upstream request failed");
-          await this.settle(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", err.statusCode ?? 502, err.code);
+        const upStatus = err?.statusCode ?? 502;
+        // Resolve retry action: channel.retryPolicy overrides default 429/503-continue.
+        const action = this.resolveRetryAction(channel.retryPolicy, upStatus, err?.code);
+        if (action === "stop" || action === "stop-and-cooldown") {
+          request.log.error({ err, requestId, action }, "Upstream request failed (retryPolicy stop)");
+          await this.settle(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", upStatus, err.code);
+          if (action === "stop-and-cooldown") {
+            await this.redis.set(redisKeys.nodeCooldown(node.id), "1", "EX", 60);
+          }
           throw internalError("Upstream request failed");
         }
-        // 429/503 — try next node
-        request.log.warn({ err, requestId, nodeId: node.id.toString(), attempt }, "Node returned 429/503, trying next node");
-        // Mark node cooldown
-        await this.redis.set(
-          redisKeys.nodeCooldown(node.id),
-          "1",
-          "EX",
-          60, // 60s cooldown
-        );
+        const shouldContinue = action ? action.startsWith("continue") : (upStatus === 429 || upStatus === 503);
+        if (!shouldContinue) {
+          request.log.error({ err, requestId }, "Upstream request failed");
+          await this.settle(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", upStatus, err.code);
+          throw internalError("Upstream request failed");
+        }
+        // continue (with optional cooldown)
+        if (action === "continue-and-cooldown" || upStatus === 429 || upStatus === 503) {
+          await this.redis.set(redisKeys.nodeCooldown(node.id), "1", "EX", 60);
+        }
+        request.log.warn({ err, requestId, channelId: channel.id.toString(), nodeId: node.id.toString(), attempt, action }, "Retrying with next channel/node");
       }
     }
 
@@ -323,14 +362,14 @@ export class RelayService {
       const keyHash = hashApiKey(rawKey);
       apiKey = await this.prisma.apiKey.findUnique({
         where: { keyHash },
-        include: { user: true, plan: true },
+        include: { user: true, plan: true, keyGroup: true },
       });
     } else {
       try {
         const payload = verifyToken(rawKey, (request.server as any).env?.JWT_SECRET || process.env.JWT_SECRET);
         apiKey = await this.prisma.apiKey.findFirst({
           where: { userId: payload.userId, status: "active" },
-          include: { user: true, plan: true },
+          include: { user: true, plan: true, keyGroup: true },
           orderBy: { createdAt: "asc" },
         });
       } catch {}
@@ -352,6 +391,14 @@ export class RelayService {
     // Key quota
     if (apiKey.quota > 0 && apiKey.usedQuota >= apiKey.quota) {
       throw rateLimited("API key quota exhausted");
+    }
+
+    // Key group quota (shared pool)
+    const g = apiKey.keyGroup;
+    if (g && g.quota !== -1n && g.usedQuota >= g.quota) {
+      const err = rateLimited("Key group quota exhausted");
+      (err as any).cause = { code: "quota_exceeded", scope: "group" };
+      throw err;
     }
 
     // Key call limit
@@ -417,28 +464,51 @@ export class RelayService {
   }
 
   /**
-   * Get all healthy, non-cooled-down nodes for a set of routes.
-   * Returns nodes sorted by health (best headroom first).
+   * Resolve the retry action for an upstream failure, consulting the
+   * channel's retryPolicy if present. Returns one of:
+   *   stop | stop-and-cooldown | continue | continue-and-cooldown | undefined
+   * undefined means "no policy matched — use default (continue for 429/503, stop otherwise)".
    */
-  private async getHealthyNodes(routes: any[]): Promise<ChannelNode[]> {
-    for (const route of routes) {
-      const nodes = await this.prisma.channelNode.findMany({
-        where: {
-          channelId: route.channelId,
-          status: "healthy",
-        },
-      });
-
-      const available: ChannelNode[] = [];
-      for (const node of nodes) {
-        const cooldownKey = redisKeys.nodeCooldown(node.id);
-        const isCooling = await this.redis.exists(cooldownKey);
-        if (!isCooling) available.push(node);
+  private resolveRetryAction(retryPolicy: any, status: number, errorCode?: string): string | undefined {
+    if (!retryPolicy || !Array.isArray(retryPolicy.rules)) return undefined;
+    for (const rule of retryPolicy.rules) {
+      if (rule.status !== status) continue;
+      if (Array.isArray(rule.match) && rule.match.length > 0) {
+        const text = errorCode ?? "";
+        if (!rule.match.some((m: string) => text.includes(m))) continue;
       }
-
-      if (available.length > 0) return available;
+      return rule.action; // stop | stop-and-cooldown | continue | continue-and-cooldown
     }
-    return [];
+    return undefined;
+  }
+
+  /**
+   * Load the distinct channels referenced by the given routes, with their
+   * billingMultiplier. status=active only.
+   */
+  private async resolveChannels(routes: any[]): Promise<any[]> {
+    const channelIds = [...new Set(routes.map((r: any) => r.channelId))];
+    if (channelIds.length === 0) return [];
+    return this.prisma.channel.findMany({
+      where: { id: { in: channelIds }, status: "active" },
+    });
+  }
+
+  /**
+   * Get all healthy, non-cooled-down nodes across the given channels.
+   * (probe worker maintains status; Redis cooldown is the short-term 429 cooldown.)
+   */
+  private async getHealthyNodesForChannels(channelIds: bigint[]): Promise<ChannelNode[]> {
+    const nodes = await this.prisma.channelNode.findMany({
+      where: { channelId: { in: channelIds }, status: "healthy" },
+    });
+    const available: ChannelNode[] = [];
+    for (const node of nodes) {
+      const cooldownKey = redisKeys.nodeCooldown(node.id);
+      const isCooling = await this.redis.exists(cooldownKey);
+      if (!isCooling) available.push(node);
+    }
+    return available;
   }
 
   /**
@@ -578,6 +648,7 @@ export class RelayService {
     httpStatus: number,
     errorCode?: string,
   ) {
+    if (ctx.isProbe) return;
     const finishedAt = new Date();
 
     try {
@@ -589,7 +660,9 @@ export class RelayService {
       let pricingDetail: any = undefined;
 
       if (alias && (usage.inputTokens > 0 || usage.outputTokens > 0)) {
-        const multiplier = ctx.apiKey.plan?.billingMultiplier ?? 1;
+        const planMultiplier = ctx.apiKey.plan?.billingMultiplier ?? 1;
+        const channelMultiplier = ctx.channelBillingMultiplier ?? 1;
+        const multiplier = planMultiplier * channelMultiplier;
         const ppt = (p: number) => p / 1_000_000;
 
         const inputCostUsd = usage.inputTokens * ppt(alias.inputPrice);
@@ -600,6 +673,7 @@ export class RelayService {
         const totalUsd = inputCostUsd + cacheWriteCostUsd + cacheReadCostUsd + outputCostUsd;
         // 1 billableUnit = 1 micro-dollar ($0.000001). 1M units = $1
         billableUnits = BigInt(Math.round(totalUsd * 1_000_000 * multiplier));
+        const costUsd = totalUsd * multiplier;
 
         pricingDetail = {
           inputTokens: usage.inputTokens, inputPrice: alias.inputPrice, inputCostUsd: +inputCostUsd.toFixed(6),
@@ -607,7 +681,8 @@ export class RelayService {
           cacheReadTokens: usage.cacheReadTokens, cacheReadPrice: alias.cacheReadPrice, cacheReadCostUsd: +cacheReadCostUsd.toFixed(6),
           outputTokens: usage.outputTokens, outputPrice: alias.outputPrice, outputCostUsd: +outputCostUsd.toFixed(6),
           totalUsd: +totalUsd.toFixed(6),
-          billingMultiplier: multiplier,
+          planMultiplier, channelMultiplier, billingMultiplier: multiplier,
+          costUsd: +costUsd.toFixed(6),
         };
       }
 
@@ -648,6 +723,7 @@ export class RelayService {
               requestId: ctx.requestId,
               userId: ctx.apiKey.userId,
               apiKeyId: ctx.apiKey.id,
+              channelId: ctx.channelId,
               billingPeriod: period,
               billedRequests: 1,
               inputTokens: usage.inputTokens,
@@ -655,6 +731,8 @@ export class RelayService {
               cacheCreationTokens: usage.cacheCreationTokens,
               cacheReadTokens: usage.cacheReadTokens,
               billableUnits,
+              cost: pricingDetail ? pricingDetail.costUsd : 0,
+              billingMultiplier: pricingDetail ? pricingDetail.billingMultiplier : 1,
               settlementStatus: "final",
             },
           });
@@ -668,6 +746,14 @@ export class RelayService {
               lastUsedAt: finishedAt,
             },
           });
+
+          // Deduct from key group quota (if key belongs to a group with a finite pool)
+          if (ctx.apiKey.keyGroupId) {
+            await tx.keyGroup.update({
+              where: { id: ctx.apiKey.keyGroupId },
+              data: { usedQuota: { increment: billableUnits } },
+            });
+          }
 
           // Deduct from user quota
           await tx.user.update({
@@ -718,8 +804,13 @@ export class RelayService {
     const requestedModel = body.model ?? (request.query as any).model;
     if (!requestedModel) throw forbidden("Model is required");
 
+    // Model whitelist: key-level overrides group-level; both empty = all allowed.
     const keyModels = apiKey.models as string[] | null;
-    if (keyModels && keyModels.length > 0 && !keyModels.includes(requestedModel)) {
+    const groupModels = apiKey.keyGroup?.models as string[] | null;
+    const effectiveModels = (keyModels && keyModels.length > 0)
+      ? keyModels
+      : (groupModels && groupModels.length > 0 ? groupModels : null);
+    if (effectiveModels && !effectiveModels.includes(requestedModel)) {
       throw forbidden(`Model ${requestedModel} not allowed on this key`);
     }
 
@@ -734,9 +825,10 @@ export class RelayService {
       if (check.blocked) throw badRequest("Content contains prohibited content");
     }
 
-    // Route to node
+    // Route to node (legacy single-node path for image/embeddings)
     const { alias, routes } = await this.resolveRoute(requestedModel);
-    const allNodes = await this.getHealthyNodes(routes);
+    const channels = await this.resolveChannels(routes);
+    const allNodes = await this.getHealthyNodesForChannels(channels.map((c) => c.id));
     if (allNodes.length === 0) throw internalError("No available upstream nodes");
     const node = allNodes[0];
 
@@ -746,6 +838,7 @@ export class RelayService {
       model: requestedModel,
       upstreamModel: routes[0]?.upstreamModel ?? requestedModel,
       channelId: node.channelId,
+      channelBillingMultiplier: 1.0,
       nodeId: node.id,
       nodeUrl: node.internalUrl,
       nodeApiKey: node.internalApiKey,
@@ -887,8 +980,13 @@ export class RelayService {
 
     if (!requestedModel) throw forbidden("Model is required");
 
+    // Model whitelist: key-level overrides group-level; both empty = all allowed.
     const keyModels = apiKey.models as string[] | null;
-    if (keyModels && keyModels.length > 0 && !keyModels.includes(requestedModel)) {
+    const groupModels = apiKey.keyGroup?.models as string[] | null;
+    const effectiveModels = (keyModels && keyModels.length > 0)
+      ? keyModels
+      : (groupModels && groupModels.length > 0 ? groupModels : null);
+    if (effectiveModels && !effectiveModels.includes(requestedModel)) {
       throw forbidden(`Model ${requestedModel} not allowed on this key`);
     }
 
@@ -899,9 +997,10 @@ export class RelayService {
       if (check.blocked) throw badRequest("Content contains prohibited content");
     }
 
-    // Route to node
+    // Route to node (legacy single-node path for image/embeddings)
     const { alias, routes } = await this.resolveRoute(requestedModel);
-    const allNodes = await this.getHealthyNodes(routes);
+    const channels = await this.resolveChannels(routes);
+    const allNodes = await this.getHealthyNodesForChannels(channels.map((c) => c.id));
     if (allNodes.length === 0) throw internalError("No available upstream nodes");
     const node = allNodes[0];
 
@@ -914,6 +1013,7 @@ export class RelayService {
       model: requestedModel,
       upstreamModel: routes[0]?.upstreamModel ?? requestedModel,
       channelId: node.channelId,
+      channelBillingMultiplier: 1.0,
       nodeId: node.id,
       nodeUrl: node.internalUrl,
       nodeApiKey: node.internalApiKey,
@@ -960,6 +1060,7 @@ export class RelayService {
     endpoint: string,
     errorCode?: string,
   ) {
+    if (ctx.isProbe) return;
     const finishedAt = new Date();
     try {
       const alias = await this.prisma.modelAlias.findUnique({ where: { alias: ctx.model } });
@@ -1024,6 +1125,7 @@ export class RelayService {
               requestId: ctx.requestId,
               userId: ctx.apiKey.userId,
               apiKeyId: ctx.apiKey.id,
+              channelId: ctx.channelId,
               billingPeriod: period,
               billedRequests: 1,
               inputTokens: usage.inputTokens,
@@ -1031,6 +1133,8 @@ export class RelayService {
               cacheCreationTokens: usage.cacheCreationTokens,
               cacheReadTokens: usage.cacheReadTokens,
               billableUnits,
+              cost: pricingDetail ? pricingDetail.costUsd : 0,
+              billingMultiplier: pricingDetail ? pricingDetail.billingMultiplier : 1,
               settlementStatus: "final",
             },
           });
