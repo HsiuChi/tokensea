@@ -1,10 +1,16 @@
 # TokenSea CPA Configuration
-# Configured for cli-proxy-api (cpa) v6.9+
+# Configured for cli-proxy-api (cpa) v7.2+
 
 host: "0.0.0.0"
 port: 8080
 
 auth-dir: "/CLIProxyAPI/auths"
+
+# Globally disable Claude request cloaking (the Claude Code CLI disguise and
+# system prompt replacement). Wire-level fidelity is handled by dario v6;
+# CPA must pass requests through unchanged. Per claude-api-key cloak.mode
+# is no longer needed.
+disable-claude-cloak-mode: true
 
 api-keys:
   - "tsk-prod-key-001-change-me"
@@ -15,12 +21,10 @@ api-keys:
 claude-api-key:
   - api-key: "ts-internal-1"
     base-url: "http://dario-1:3456"
-    cloak:
-      mode: "never"
 
 codex-api-key:
   - api-key: "ts-codex-internal-1"
-    base-url: "http://codex-dario-1:3457"
+    base-url: "http://dario-1:3456"
     models:
       - name: "gpt-5.5"
         alias: "gpt-5.5"
@@ -34,16 +38,32 @@ codex-api-key:
         alias: "gpt-4.1-mini"
       - name: "gpt-4.1-nano"
         alias: "gpt-4.1-nano"
-    cloak:
-      mode: "never"
+
+# Codex provider behavior.
+codex:
+  # Buffer the initial handshake events so an upstream server_is_overloaded
+  # rejection (smuggled inside an HTTP 200 stream) can trigger transparent
+  # failover to another dario credential before response headers commit.
+  stream-bootstrap-buffering: true
+  # Codex wire-level cloaking is handled by dario v6; CPA passes through.
+  disable-codex-cloaking: true
 
 routing:
   strategy: "round-robin"
   session-affinity: true
   session-affinity-ttl: "4h"
+  # Subagents inherit and bind to the parent's upstream credential across
+  # all providers, maximizing Prompt/KV cache reuse and minimizing TTFT.
+  session-affinity-subagents: true
 
+# v7.x semantics: request-retry is the number of ADDITIONAL retry rounds
+# after the initial round (round 0). Round r only admits credentials whose
+# effective request-retry is at least r.
 request-retry: 3
-max-retry-credentials: 3
+# 0 = try all available credentials per round (was hard-coded to 3).
+max-retry-credentials: 0
+# Maximum cooldown wait in seconds between retry rounds.
+max-retry-interval: 30
 
 debug: false
 

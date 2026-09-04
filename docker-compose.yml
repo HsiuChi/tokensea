@@ -14,7 +14,7 @@ services:
   # CPA — CLI Proxy API (Gateway)
   # ============================================
   cpa:
-    image: eceasy/cli-proxy-api:latest
+    image: eceasy/cli-proxy-api:v7.2.149
     container_name: tokensea-cpa
     restart: unless-stopped
     ports:
