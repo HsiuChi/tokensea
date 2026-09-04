@@ -10,6 +10,8 @@
 import type { PrismaClient } from "@prisma/client";
 import type Redis from "ioredis";
 import { redisKeys } from "../../lib/redis-keys.js";
+import { dispatchWebhookEvent } from "../notify/webhook-service.js";
+import { upstreamHeaders, upstreamUrl } from "./upstream-request.js";
 
 const PROBE_INTERVAL_MS = 30_000;
 const PROBE_CONCURRENCY = 10;
@@ -50,9 +52,9 @@ export function startHealthProbeWorker(
       let ok = false;
       let body: any = null;
       try {
-        const res = await fetch(`${node.internalUrl}${path}`, {
+        const res = await fetch(upstreamUrl(node.internalUrl, path), {
           signal: AbortSignal.timeout(timeoutMs),
-          headers: node.internalApiKey ? { "x-api-key": node.internalApiKey } : {},
+          headers: upstreamHeaders(node, path),
         });
         const latency = Date.now() - start;
         // Node is considered reachable if it returns any JSON we can parse
@@ -61,9 +63,10 @@ export function startHealthProbeWorker(
         // Only network errors / non-JSON / 404-no-fallback count as fail.
         if (res.status === 401 || res.status === 403) {
           // auth required but our key was rejected → try fallback endpoint
-          const r2 = await fetch(`${node.internalUrl}${path === "/health" ? "/healthz" : "/health"}`, {
+          const fallbackPath = path === "/health" ? "/healthz" : "/health";
+          const r2 = await fetch(upstreamUrl(node.internalUrl, fallbackPath), {
             signal: AbortSignal.timeout(timeoutMs),
-            headers: node.internalApiKey ? { "x-api-key": node.internalApiKey } : {},
+            headers: upstreamHeaders(node, fallbackPath),
           });
           const l2 = Date.now() - start;
           if (r2.ok || r2.status === 503) {
@@ -74,9 +77,10 @@ export function startHealthProbeWorker(
           }
         } else if (res.status === 404) {
           // endpoint not found → fallback
-          const r2 = await fetch(`${node.internalUrl}${path === "/health" ? "/healthz" : "/health"}`, {
+          const fallbackPath = path === "/health" ? "/healthz" : "/health";
+          const r2 = await fetch(upstreamUrl(node.internalUrl, fallbackPath), {
             signal: AbortSignal.timeout(timeoutMs),
-            headers: node.internalApiKey ? { "x-api-key": node.internalApiKey } : {},
+            headers: upstreamHeaders(node, fallbackPath),
           });
           const l2 = Date.now() - start;
           if (r2.ok || r2.status === 503) {
@@ -148,6 +152,11 @@ async function updateSuccess(
     : node.status === "degraded" && succ >= recoverThreshold
       ? "healthy"
       : node.status;
+  if (newStatus !== node.status && newStatus === "healthy") {
+    dispatchWebhookEvent(prisma, "node.recovered", {
+      nodeId: node.id.toString(), node: node.name, channel: node.channel?.name, latencyMs: latency,
+    });
+  }
   await prisma.channelNode.update({
     where: { id: node.id },
     data: {
@@ -170,6 +179,11 @@ async function updateFail(
   let newStatus = node.status;
   if (fails >= failThreshold) newStatus = "unhealthy";
   else if (fails === 1 && node.status === "healthy") newStatus = "degraded";
+  if (newStatus !== node.status && (newStatus === "unhealthy" || newStatus === "degraded")) {
+    dispatchWebhookEvent(prisma, `node.${newStatus}` as any, {
+      nodeId: node.id.toString(), node: node.name, channel: node.channel?.name, consecutiveFails: fails,
+    });
+  }
   await prisma.channelNode.update({
     where: { id: node.id },
     data: {

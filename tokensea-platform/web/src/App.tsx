@@ -17,6 +17,8 @@ import { TopupPage } from "@/pages/Topup"
 import { ChatPage } from "@/pages/Chat"
 import { LogsPage } from "@/pages/Logs"
 import { MarketplacePage } from "@/pages/Marketplace"
+import { ChannelStatusPage } from "@/pages/ChannelStatus"
+import { DeployPage } from "@/pages/Deploy"
 import { AdminDashboard } from "@/pages/admin/Dashboard"
 import { AdminUsers } from "@/pages/admin/Users"
 import { AdminKeys } from "@/pages/admin/Keys"
@@ -55,6 +57,8 @@ function AppRoutes() {
       <Route path="/app/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
       <Route path="/app/topup" element={<ProtectedRoute><TopupPage /></ProtectedRoute>} />
       <Route path="/app/marketplace" element={<ProtectedRoute><MarketplacePage /></ProtectedRoute>} />
+      <Route path="/app/channels" element={<ProtectedRoute><ChannelStatusPage /></ProtectedRoute>} />
+      <Route path="/app/deploy" element={<ProtectedRoute><DeployPage /></ProtectedRoute>} />
       <Route path="/app/chat" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
       <Route path="/app/logs" element={<ProtectedRoute><LogsPage /></ProtectedRoute>} />
       <Route path="/admin" element={<ProtectedRoute admin><AdminDashboard /></ProtectedRoute>} />

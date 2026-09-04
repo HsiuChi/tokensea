@@ -516,7 +516,7 @@ export function ChatPage() {
         body: JSON.stringify({
           model,
           messages: apiMessages,
-          temperature: 0.7,
+          temperature: model.toLowerCase().startsWith("kimi") ? 1 : 0.7,
           max_tokens: 4096,
           stream: true,
         }),
@@ -808,8 +808,7 @@ export function ChatPage() {
                   <>
                     <SelectItem value="claude-sonnet-4-20250514">Claude Sonnet 4</SelectItem>
                     <SelectItem value="claude-opus-4-20250514">Claude Opus 4</SelectItem>
-                    <SelectItem value="gpt-4o">GPT-4o</SelectItem>
-                    <SelectItem value="gpt-4o-mini">GPT-4o Mini</SelectItem>
+                    <SelectItem value="gpt-5.5">GPT-5.5</SelectItem>
                   </>
                 )}
               </SelectContent>
@@ -908,33 +907,31 @@ export function ChatPage() {
                         </div>
                       )}
 
-                      {/* Actions */}
-                      <div className="flex items-center justify-end gap-0.5 mt-1">
-                        {msg.role === "assistant" && (
-                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6"
-                              onClick={() => copyMessage(i)}
-                            >
-                              {copiedIdx === i ? (
-                                <Check className="h-3 w-3 text-emerald-500" />
-                              ) : (
-                                <Copy className="h-3 w-3" />
-                              )}
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-6 w-6"
-                              onClick={() => deleteMessage(i)}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
-                          </div>
-                        )}
-                      </div>
+                      {/* Actions float over the bubble so hidden controls do not reserve space. */}
+                      {msg.role === "assistant" && (
+                        <div className="absolute bottom-1 right-1 flex items-center gap-0.5 rounded-lg bg-slate-100/95 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-hover:opacity-100 dark:bg-slate-800/95">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6"
+                            onClick={() => copyMessage(i)}
+                          >
+                            {copiedIdx === i ? (
+                              <Check className="h-3 w-3 text-emerald-500" />
+                            ) : (
+                              <Copy className="h-3 w-3" />
+                            )}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6"
+                            onClick={() => deleteMessage(i)}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      )}
                     </div>
 
                     {msg.role === "user" && (

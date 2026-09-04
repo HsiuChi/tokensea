@@ -62,6 +62,8 @@ export const api = {
     request<any>(`/api/public/models${params ? `?${params}` : ""}`, undefined, true),
   getModelDetail: (alias: string) =>
     request<any>(`/api/public/models/${alias}`),
+  getChannelStatus: (period: "24h" | "7d" | "30d" = "7d") =>
+    request<any>(`/api/public/channel-status?period=${period}`, undefined, true),
 
   // Plans
   listPublicPlans: () => request<any>("/api/plan/public"),
@@ -74,6 +76,8 @@ export const api = {
 
   // Channels
   listChannels: (page = 1) => request<any>(`/api/channel/?page=${page}`),
+  getKsyunCatalog: () => request<any>("/api/channel/ksyun/catalog"),
+  bootstrapKsyun: (body: any) => request<any>("/api/channel/ksyun/bootstrap", { method: "POST", body: JSON.stringify(body) }),
   getChannel: (id: string) => request<any>(`/api/channel/${id}`),
   createChannel: (body: any) => request<any>("/api/channel/", { method: "POST", body: JSON.stringify(body) }),
   updateChannel: (id: string, body: any) => request<any>(`/api/channel/${id}`, { method: "PUT", body: JSON.stringify(body) }),
@@ -81,8 +85,17 @@ export const api = {
   addNode: (channelId: string, body: any) => request<any>(`/api/channel/${channelId}/nodes`, { method: "POST", body: JSON.stringify(body) }),
   deleteNode: (nodeId: string) => request<any>(`/api/channel/nodes/${nodeId}`, { method: "DELETE" }),
   healthCheckNode: (nodeId: string) => request<any>(`/api/channel/nodes/${nodeId}/health`, { method: "POST" }),
+  getOAuthStatus: (nodeId: string) => request<any>(`/api/channel/nodes/${nodeId}/oauth`),
   testChannel: (id: string, model?: string) => request<any>(`/api/channel/${id}/test`, { method: "POST", body: JSON.stringify(model ? { model } : {}) }),
   testNode: (channelId: string, nodeId: string, model?: string) => request<any>(`/api/channel/${channelId}/nodes/${nodeId}/test`, { method: "POST", body: JSON.stringify(model ? { model } : {}) }),
+
+  // Webhooks
+  listWebhooks: () => request<any>("/api/webhook/"),
+  listWebhookEvents: () => request<any>("/api/webhook/events"),
+  createWebhook: (body: any) => request<any>("/api/webhook/", { method: "POST", body: JSON.stringify(body) }),
+  updateWebhook: (id: string, body: any) => request<any>(`/api/webhook/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteWebhook: (id: string) => request<any>(`/api/webhook/${id}`, { method: "DELETE" }),
+  testWebhook: (id: string) => request<any>(`/api/webhook/${id}/test`, { method: "POST" }),
 
   // Key groups
   listKeyGroups: (page = 1) => request<any>(`/api/keygroup/?page=${page}`),

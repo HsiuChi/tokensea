@@ -1,5 +1,24 @@
-import type { PrismaClient } from "@prisma/client";
-import { notFound } from "../../lib/errors.js";
+import { Prisma, type PrismaClient } from "@prisma/client";
+import { badRequest, notFound } from "../../lib/errors.js";
+import { encryptUpstreamSecret, maskUpstreamSecret, upstreamSecretFingerprint } from "../../lib/upstream-secret.js";
+import { KSYUN_MODELS } from "../../config/ksyun-model-catalog.js";
+import { upstreamHeaders, upstreamUrl } from "./upstream-request.js";
+
+type NodeInput = {
+  name: string;
+  internalUrl: string;
+  internalApiKey: string;
+  maxConcurrent?: number;
+  adapter?: string;
+  authType?: string;
+  probePath?: string;
+  probeTimeoutMs?: number;
+};
+
+function publicNode<T extends Record<string, any>>(node: T) {
+  const { internalApiKey: _secret, ...safe } = node;
+  return { ...safe, apiKeyMasked: node.keyPrefix || "••••••••" };
+}
 
 export class ChannelService {
   constructor(private prisma: PrismaClient) {}
@@ -15,13 +34,13 @@ export class ChannelService {
       }),
       this.prisma.channel.count(),
     ]);
-    return { items, total, page, pageSize };
+    return { items: items.map((channel) => ({ ...channel, nodes: channel.nodes.map(publicNode) })), total, page, pageSize };
   }
 
   async get(id: bigint) {
     const ch = await this.prisma.channel.findUnique({ where: { id }, include: { nodes: true } });
     if (!ch) throw notFound("Channel not found");
-    return ch;
+    return { ...ch, nodes: ch.nodes.map(publicNode) };
   }
 
   async create(data: { name: string; type: string; models: string[]; priority?: number; weight?: number }) {
@@ -42,17 +61,113 @@ export class ChannelService {
   }
 
   // Node operations
-  async addNode(channelId: bigint, data: { name: string; internalUrl: string; internalApiKey: string; maxConcurrent?: number }) {
+  async addNode(channelId: bigint, data: NodeInput) {
     const ch = await this.prisma.channel.findUnique({ where: { id: channelId } });
     if (!ch) throw notFound("Channel not found");
-    return this.prisma.channelNode.create({ data: {
+    const rawKey = data.internalApiKey.trim();
+    const node = await this.prisma.channelNode.create({ data: {
       channelId, name: data.name, internalUrl: data.internalUrl,
-      internalApiKey: data.internalApiKey, maxConcurrent: data.maxConcurrent ?? 5,
+      internalApiKey: encryptUpstreamSecret(rawKey),
+      keyFingerprint: upstreamSecretFingerprint(rawKey),
+      keyPrefix: maskUpstreamSecret(rawKey),
+      adapter: data.adapter ?? "dario",
+      authType: data.authType ?? "x-api-key",
+      probePath: data.probePath,
+      probeTimeoutMs: data.probeTimeoutMs ?? 5000,
+      maxConcurrent: data.maxConcurrent ?? 5,
     }});
+    return publicNode(node);
   }
 
   async updateNode(nodeId: bigint, data: Record<string, any>) {
-    return this.prisma.channelNode.update({ where: { id: nodeId }, data });
+    const update = { ...data };
+    if (typeof update.internalApiKey === "string" && update.internalApiKey.trim()) {
+      const rawKey = update.internalApiKey.trim();
+      update.internalApiKey = encryptUpstreamSecret(rawKey);
+      update.keyFingerprint = upstreamSecretFingerprint(rawKey);
+      update.keyPrefix = maskUpstreamSecret(rawKey);
+    } else {
+      delete update.internalApiKey;
+    }
+    return publicNode(await this.prisma.channelNode.update({ where: { id: nodeId }, data: update }));
+  }
+
+  async bootstrapKsyun(data: { apiKeys: string[]; modelIds?: string[]; channelName?: string; maxConcurrent?: number }) {
+    const keys = [...new Set(data.apiKeys.map((key) => key.trim()).filter(Boolean))];
+    if (keys.length === 0) throw badRequest("At least one KSP API key is required");
+    const selected = new Set(data.modelIds?.length ? data.modelIds : KSYUN_MODELS.map((model) => model.id));
+    const models = KSYUN_MODELS.filter((model) => selected.has(model.id));
+    if (models.length === 0) throw badRequest("Select at least one supported KSP model");
+    const cnyPerUsd = Number(process.env.KSYUN_CNY_PER_USD || 7.2);
+    const usd = (cny: number) => +(cny / cnyPerUsd).toFixed(6);
+
+    const channel = await this.prisma.channel.findFirst({ where: { name: data.channelName || "金山云星流" } });
+    const savedChannel = channel
+      ? await this.prisma.channel.update({ where: { id: channel.id }, data: {
+          type: "custom", status: "active", baseUrl: "https://kspmas.ksyun.com",
+          models: models.map((model) => model.id), probeEnabled: true, testModel: models[0].id,
+          retryPolicy: { rules: [401, 403, 408, 429, 500, 502, 503, 504].map((status) => ({ status, action: "continue-and-cooldown" })) },
+        } })
+      : await this.prisma.channel.create({ data: {
+          name: data.channelName || "金山云星流", type: "custom", status: "active",
+          baseUrl: "https://kspmas.ksyun.com", models: models.map((model) => model.id),
+          priority: 50, weight: 1, billingMultiplier: 1, probeEnabled: true,
+          testModel: models[0].id,
+          retryPolicy: { rules: [401, 403, 408, 429, 500, 502, 503, 504].map((status) => ({ status, action: "continue-and-cooldown" })) },
+        } });
+
+    let addedKeys = 0;
+    for (const [index, key] of keys.entries()) {
+      const fingerprint = upstreamSecretFingerprint(key);
+      const exists = await this.prisma.channelNode.findFirst({ where: { channelId: savedChannel.id, keyFingerprint: fingerprint } });
+      if (exists) continue;
+      await this.prisma.channelNode.create({ data: {
+        channelId: savedChannel.id,
+        name: `KSP Key ${String(index + 1).padStart(2, "0")}`,
+        internalUrl: "https://kspmas.ksyun.com",
+        internalApiKey: encryptUpstreamSecret(key),
+        keyFingerprint: fingerprint,
+        keyPrefix: maskUpstreamSecret(key),
+        adapter: "ksyun",
+        authType: "bearer",
+        probePath: "/v1/models",
+        probeTimeoutMs: 10000,
+        maxConcurrent: data.maxConcurrent ?? 20,
+      } });
+      addedKeys++;
+    }
+
+    for (const [sortOrder, model] of models.entries()) {
+      const alias = await this.prisma.modelAlias.upsert({
+        where: { alias: model.id },
+        update: {
+          displayName: model.displayName, provider: model.provider, inputPrice: usd(model.inputPrice),
+          outputPrice: usd(model.outputPrice), cacheReadPrice: usd(model.cacheReadPrice ?? 0),
+          description: model.description ?? null, category: model.category ?? "chat",
+          maxContext: model.maxContext, supportsVision: model.supportsVision ?? false,
+          supportsStream: model.supportsStream ?? true, supportsTools: model.supportsTools ?? true, status: "active",
+          pricing: model.category === "video" ? Prisma.JsonNull : { currency: "USD", unit: "1M tokens", source: "KSP public pricing", cnyPerUsd, upstreamCny: { input: model.inputPrice, output: model.outputPrice, cacheRead: model.cacheReadPrice ?? 0 }, firstTier: true },
+        },
+        create: {
+          alias: model.id, displayName: model.displayName, provider: model.provider,
+          description: model.description ?? null,
+          category: model.category ?? "chat", tags: [model.provider, model.category ?? "chat"],
+          inputPrice: usd(model.inputPrice), outputPrice: usd(model.outputPrice),
+          cacheReadPrice: usd(model.cacheReadPrice ?? 0), maxContext: model.maxContext,
+          supportsVision: model.supportsVision ?? false, supportsStream: model.supportsStream ?? true,
+          supportsTools: model.supportsTools ?? true, sortOrder: 1000 - sortOrder, status: "active",
+          pricing: model.category === "video" ? Prisma.JsonNull : { currency: "USD", unit: "1M tokens", source: "KSP public pricing", cnyPerUsd, upstreamCny: { input: model.inputPrice, output: model.outputPrice, cacheRead: model.cacheReadPrice ?? 0 }, firstTier: true },
+        },
+      });
+      const route = await this.prisma.modelRoute.findFirst({ where: { aliasId: alias.id, channelId: savedChannel.id } });
+      if (route) {
+        await this.prisma.modelRoute.update({ where: { id: route.id }, data: { upstreamModel: model.id, priority: 50, status: "active" } });
+      } else {
+        await this.prisma.modelRoute.create({ data: { aliasId: alias.id, channelId: savedChannel.id, upstreamModel: model.id, priority: 50, status: "active" } });
+      }
+    }
+
+    return { channelId: savedChannel.id, addedKeys, totalSubmittedKeys: keys.length, models: models.map((model) => model.id) };
   }
 
   async deleteNode(nodeId: bigint) {
@@ -65,7 +180,11 @@ export class ChannelService {
 
     try {
       const start = Date.now();
-      const res = await fetch(`${node.internalUrl}/healthz`, { signal: AbortSignal.timeout(10000) });
+      const path = node.probePath || "/healthz";
+      const res = await fetch(upstreamUrl(node.internalUrl, path), {
+        signal: AbortSignal.timeout(node.probeTimeoutMs || 10000),
+        headers: upstreamHeaders(node, path),
+      });
       const latency = Date.now() - start;
       const body = await res.json();
 
@@ -86,6 +205,45 @@ export class ChannelService {
       });
       return { healthy: false, error: err.message };
     }
+  }
+
+  /**
+   * Proxy the dario node's OAuth / account-pool status: /status (pool health,
+   * token expiry) plus /accounts (per-account utilization), both key-gated.
+   * Each part is best-effort so one failing endpoint doesn't hide the other.
+   */
+  async getOAuthStatus(nodeId: bigint) {
+    const node = await this.prisma.channelNode.findUnique({ where: { id: nodeId } });
+    if (!node) throw notFound("Node not found");
+    if (node.adapter !== "dario") return { node: node.name, status: null, accounts: null, errors: { status: "OAuth status is only available for dario nodes" } };
+    const headers = upstreamHeaders(node, "/status");
+
+    const [status, accounts] = await Promise.allSettled([
+      (async () => {
+        const res = await fetch(`${node.internalUrl}/status`, {
+          headers, signal: AbortSignal.timeout(10_000),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })(),
+      (async () => {
+        const res = await fetch(`${node.internalUrl}/accounts`, {
+          headers, signal: AbortSignal.timeout(10_000),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })(),
+    ]);
+
+    return {
+      node: node.name,
+      status: status.status === "fulfilled" ? status.value : null,
+      accounts: accounts.status === "fulfilled" ? accounts.value : null,
+      errors: {
+        status: status.status === "rejected" ? String(status.reason?.message ?? status.reason) : undefined,
+        accounts: accounts.status === "rejected" ? String(accounts.reason?.message ?? accounts.reason) : undefined,
+      },
+    };
   }
 
   /**
@@ -118,12 +276,13 @@ export class ChannelService {
   private async _probeNode(node: any, model: string) {
     const start = Date.now();
     try {
-      const res = await fetch(`${node.internalUrl}/v1/chat/completions`, {
+      const path = "/v1/chat/completions";
+      const res = await fetch(upstreamUrl(node.internalUrl, path), {
         method: "POST",
         signal: AbortSignal.timeout(30_000),
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": node.internalApiKey,
+          ...upstreamHeaders(node, path),
           "x-tokensea-probe": "1",
         },
         body: JSON.stringify({

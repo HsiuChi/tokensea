@@ -89,7 +89,7 @@ async function main() {
   });
   await prisma.channel.update({
     where: { id: 2n },
-    data: { models: ["gpt-5.6-sol","gpt-5.6-terra","gpt-5.6-luna","gpt-5.5","gpt-4.1","gpt-4.1-mini","gpt-4.1-nano","o4-mini"] },
+    data: { models: ["gpt-5.6-sol","gpt-5.6-terra","gpt-5.6-luna","gpt-5.5"] },
   });
   console.log("✓ channel.models arrays updated");
 

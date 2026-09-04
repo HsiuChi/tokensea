@@ -72,7 +72,7 @@ async function main() {
       rpmLimit: 60,
       tpmLimit: 100000,
       maxTokensPerRequest: 128000,
-      allowedModelAliases: ["claude-sonnet-4-6", "claude-haiku-4-5", "gpt-4.1-mini", "gpt-4.1-nano"],
+      allowedModelAliases: ["claude-sonnet-4-6", "claude-haiku-4-5"],
       billingCycleType: "monthly",
       billingMultiplier: 1.0,
       price: 4900,
@@ -99,7 +99,7 @@ async function main() {
       rpmLimit: 120,
       tpmLimit: 200000,
       maxTokensPerRequest: 200000,
-      allowedModelAliases: ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5", "gpt-4.1", "gpt-4.1-mini", "o4-mini"],
+      allowedModelAliases: ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"],
       billingCycleType: "monthly",
       billingMultiplier: 1.0,
       price: 19900,
@@ -143,10 +143,6 @@ async function main() {
     { alias: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6", provider: "claude", inputPrice: 3, outputPrice: 15, supportsTools: true, supportsVision: true, maxContext: 200000 },
     { alias: "claude-opus-4-6", displayName: "Claude Opus 4.6", provider: "claude", inputPrice: 15, outputPrice: 75, supportsTools: true, supportsVision: true, maxContext: 200000 },
     { alias: "claude-haiku-4-5", displayName: "Claude Haiku 4.5", provider: "claude", inputPrice: 1, outputPrice: 5, supportsTools: true, supportsVision: true, maxContext: 200000 },
-    { alias: "gpt-4.1", displayName: "GPT-4.1", provider: "openai", inputPrice: 2, outputPrice: 8, supportsTools: true, supportsVision: true, maxContext: 128000 },
-    { alias: "gpt-4.1-mini", displayName: "GPT-4.1 Mini", provider: "openai", inputPrice: 0.4, outputPrice: 1.6, supportsTools: true, supportsVision: true, maxContext: 128000 },
-    { alias: "gpt-4.1-nano", displayName: "GPT-4.1 Nano", provider: "openai", inputPrice: 0.1, outputPrice: 0.4, supportsTools: true, supportsVision: false, maxContext: 128000 },
-    { alias: "o4-mini", displayName: "o4-mini", provider: "openai", inputPrice: 1.1, outputPrice: 4.4, supportsTools: true, supportsVision: true, maxContext: 200000 },
   ];
 
   for (const m of models) {
@@ -179,7 +175,7 @@ async function main() {
       name: "OpenAI Codex Pool",
       type: ChannelType.codex,
       status: ChannelStatus.active,
-      models: ["gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "o4-mini"],
+      models: [],
       priority: 10,
       weight: 1,
     },
@@ -215,7 +211,7 @@ async function main() {
 
   // 5. Create model routes
   const claudeModels = ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"];
-  const codexModels = ["gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "o4-mini"];
+  const codexModels: string[] = [];
 
   for (const alias of claudeModels) {
     await prisma.modelRoute.upsert({

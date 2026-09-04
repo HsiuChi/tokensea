@@ -4,6 +4,8 @@ export const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().min(1),
   JWT_SECRET: z.string().min(8),
+  UPSTREAM_KEY_ENCRYPTION_SECRET: z.string().min(16).optional(),
+  KSYUN_CNY_PER_USD: z.coerce.number().positive().default(7.2),
   JWT_EXPIRES_IN: z.string().default("7d"),
   PORT: z.coerce.number().default(3000),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),

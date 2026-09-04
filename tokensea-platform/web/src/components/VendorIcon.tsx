@@ -1,7 +1,70 @@
+import deepSeekLogo from "@lobehub/icons-static-svg/icons/deepseek-color.svg"
+import moonshotLogo from "@lobehub/icons-static-svg/icons/moonshot.svg"
+import qwenLogo from "@lobehub/icons-static-svg/icons/qwen-color.svg"
+import xiaomiMimoLogo from "@lobehub/icons-static-svg/icons/xiaomimimo.svg"
+import zhipuLogo from "@lobehub/icons-static-svg/icons/zhipu-color.svg"
+import volcengineLogo from "@lobehub/icons-static-svg/icons/volcengine-color.svg"
+import klingLogo from "@lobehub/icons-static-svg/icons/kling-color.svg"
+import hailuoLogo from "@lobehub/icons-static-svg/icons/hailuo-color.svg"
+
+function BrandLogo({
+  src,
+  name,
+  size,
+  className = "",
+}: {
+  src: string
+  name: string
+  size: number
+  className?: string
+}) {
+  return (
+    <img
+      src={src}
+      alt={`${name} logo`}
+      width={size}
+      height={size}
+      className={`shrink-0 object-contain ${className}`}
+    />
+  )
+}
+
 export function VendorIcon({ name, size = 24 }: { name: string | undefined | null; size?: number }) {
   if (!name) return null
 
   const lower = name.toLowerCase()
+
+  if (lower.includes("deepseek")) {
+    return <BrandLogo src={deepSeekLogo} name="DeepSeek" size={size} />
+  }
+
+  if (lower.includes("kimi") || lower.includes("moonshot")) {
+    return <BrandLogo src={moonshotLogo} name="Moonshot Kimi" size={size} className="dark:invert" />
+  }
+
+  if (lower.includes("qwen")) {
+    return <BrandLogo src={qwenLogo} name="Qwen" size={size} />
+  }
+
+  if (lower.includes("zhipu") || lower.includes("chatglm") || lower.startsWith("glm")) {
+    return <BrandLogo src={zhipuLogo} name="Zhipu AI" size={size} />
+  }
+
+  if (lower.includes("xiaomi") || lower.includes("mimo")) {
+    return <BrandLogo src={xiaomiMimoLogo} name="Xiaomi MiMo" size={size} className="dark:invert" />
+  }
+
+  if (lower.includes("seedance") || lower.includes("volcengine")) {
+    return <BrandLogo src={volcengineLogo} name="Seedance" size={size} />
+  }
+
+  if (lower.includes("kling")) {
+    return <BrandLogo src={klingLogo} name="Kling AI" size={size} />
+  }
+
+  if (lower.includes("hailuo") || lower.includes("minimax")) {
+    return <BrandLogo src={hailuoLogo} name="Hailuo AI" size={size} />
+  }
 
   if (lower.includes("claude")) {
     return (

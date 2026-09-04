@@ -33,6 +33,16 @@ export async function relayRoutes(app: FastifyInstance) {
     await relayService.handleImageEdit(request, reply);
   });
 
+  // Provider-compatible async video APIs through the TokenSea key pool.
+  // Example: /v1/video/seedance-2.5/v3/contents/generations/tasks
+  app.route({
+    method: ["GET", "POST"],
+    url: "/v1/video/:model/*",
+    handler: async (request, reply) => {
+      await relayService.handleMediaRequest(request, reply);
+    },
+  });
+
   // Models list
   app.get("/v1/models", async (request, reply) => {
     // Public endpoint - returns available models

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "@/services/api";
 import { Button } from "@/components/ui/button";
@@ -6,6 +6,28 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Plus, Pencil, Trash2, Send } from "lucide-react";
+
+const WEBHOOK_EVENTS = ["*", "node.unhealthy", "node.degraded", "node.recovered", "node.oauth_expired"];
+
+interface WebhookRow {
+  id: string;
+  url: string;
+  events: string[];
+  secret?: string | null;
+  status: string;
+}
+
+interface WebhookForm {
+  url: string;
+  secret: string;
+  events: string[];
+}
+
+const emptyWebhookForm: WebhookForm = { url: "", secret: "", events: ["*"] };
 
 interface SettingsSection {
   title: string;
@@ -41,6 +63,76 @@ export function AdminSettings() {
 
   const handleChange = (key: string, value: string) => {
     setOptions((prev) => ({ ...prev, [key]: value }));
+  };
+
+  // Webhooks
+  const [webhooks, setWebhooks] = useState<WebhookRow[]>([]);
+  const [webhooksLoading, setWebhooksLoading] = useState(true);
+  const [showWebhookDialog, setShowWebhookDialog] = useState(false);
+  const [editingWebhookId, setEditingWebhookId] = useState<string | null>(null);
+  const [webhookForm, setWebhookForm] = useState<WebhookForm>({ ...emptyWebhookForm });
+  const [savingWebhook, setSavingWebhook] = useState(false);
+  const [testingWebhook, setTestingWebhook] = useState<string | null>(null);
+
+  const fetchWebhooks = useCallback(() => {
+    setWebhooksLoading(true);
+    api.listWebhooks()
+      .then((r: any) => setWebhooks(r.items || r || []))
+      .catch(console.error)
+      .finally(() => setWebhooksLoading(false));
+  }, []);
+
+  useEffect(() => { fetchWebhooks(); }, [fetchWebhooks]);
+
+  const openWebhookDialog = (w?: WebhookRow) => {
+    setEditingWebhookId(w?.id ?? null);
+    setWebhookForm(w ? { url: w.url, secret: w.secret || "", events: w.events || [] } : { ...emptyWebhookForm });
+    setShowWebhookDialog(true);
+  };
+
+  const toggleWebhookEvent = (ev: string) => {
+    setWebhookForm((prev) => {
+      const has = prev.events.includes(ev);
+      if (ev === "*") return { ...prev, events: has ? [] : ["*"] };
+      const rest = prev.events.filter((e) => e !== "*");
+      return { ...prev, events: has ? rest.filter((e) => e !== ev) : [...rest, ev] };
+    });
+  };
+
+  const handleSaveWebhook = async () => {
+    setSavingWebhook(true);
+    try {
+      const body: any = { url: webhookForm.url, events: webhookForm.events.length ? webhookForm.events : ["*"] };
+      if (webhookForm.secret) body.secret = webhookForm.secret;
+      if (editingWebhookId) await api.updateWebhook(editingWebhookId, body);
+      else await api.createWebhook(body);
+      setShowWebhookDialog(false);
+      fetchWebhooks();
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setSavingWebhook(false);
+    }
+  };
+
+  const handleTestWebhook = async (id: string) => {
+    setTestingWebhook(id);
+    try {
+      const r = await api.testWebhook(id);
+      alert(r?.ok ? `${t("admin.webhooks.testOk")} (${r.latencyMs}ms)` : `${t("admin.webhooks.testFail")}: ${r?.error ?? r?.status}`);
+    } catch (e: any) {
+      alert(`${t("admin.webhooks.testFail")}: ${e.message}`);
+    }
+    setTestingWebhook(null);
+  };
+
+  const handleDeleteWebhook = async (id: string) => {
+    if (!confirm(t("common.confirmDelete"))) return;
+    try { await api.deleteWebhook(id); fetchWebhooks(); } catch (e: any) { alert(e.message); }
+  };
+
+  const toggleWebhookStatus = async (w: WebhookRow) => {
+    try { await api.updateWebhook(w.id, { status: w.status === "active" ? "disabled" : "active" }); fetchWebhooks(); } catch (e: any) { alert(e.message); }
   };
 
   const sections: SettingsSection[] = [
@@ -111,6 +203,110 @@ export function AdminSettings() {
           </Button>
         </div>
       </div>
+
+      {/* Webhooks */}
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>{t("admin.webhooks.title")}</CardTitle>
+              <p className="text-sm text-muted-foreground">{t("admin.webhooks.subtitle")}</p>
+            </div>
+            <Button size="sm" onClick={() => openWebhookDialog()}>
+              <Plus className="mr-1 h-4 w-4" /> {t("admin.webhooks.add")}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>URL</TableHead>
+                <TableHead>{t("admin.webhooks.events")}</TableHead>
+                <TableHead>{t("common.status")}</TableHead>
+                <TableHead>{t("common.actions")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {webhooksLoading ? (
+                Array.from({ length: 2 }).map((_, i) => (
+                  <TableRow key={i}>
+                    {Array.from({ length: 4 }).map((_, j) => (
+                      <TableCell key={j}><Skeleton className="h-5 w-20" /></TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : webhooks.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={4} className="h-20 text-center text-muted-foreground">{t("common.noData")}</TableCell>
+                </TableRow>
+              ) : (
+                webhooks.map((w) => (
+                  <TableRow key={w.id}>
+                    <TableCell className="font-mono text-xs max-w-[280px] truncate">{w.url}</TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap gap-1">
+                        {(w.events || []).map((ev) => <Badge key={ev} variant="secondary" className="text-[10px]">{ev}</Badge>)}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <button onClick={() => toggleWebhookStatus(w)}>
+                        <Badge variant={w.status === "active" ? "success" : "secondary"}>
+                          {w.status === "active" ? t("common.active") : t("common.disabled")}
+                        </Badge>
+                      </button>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant="outline" disabled={testingWebhook === w.id} onClick={() => handleTestWebhook(w.id)}>
+                          <Send className="mr-1 h-3 w-3" /> {testingWebhook === w.id ? "..." : t("admin.webhooks.test")}
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => openWebhookDialog(w)}><Pencil className="h-3.5 w-3.5" /></Button>
+                        <Button size="sm" variant="ghost" className="text-destructive" onClick={() => handleDeleteWebhook(w.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {/* Webhook dialog */}
+      <Dialog open={showWebhookDialog} onOpenChange={(open) => { if (!open) { setShowWebhookDialog(false); setEditingWebhookId(null); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editingWebhookId ? t("admin.webhooks.edit") : t("admin.webhooks.add")}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>URL</Label>
+              <Input value={webhookForm.url} onChange={(e) => setWebhookForm({ ...webhookForm, url: e.target.value })} placeholder="https://hooks.example.com/tokensea" />
+            </div>
+            <div className="space-y-2">
+              <Label>{t("admin.webhooks.secret")}</Label>
+              <Input value={webhookForm.secret} onChange={(e) => setWebhookForm({ ...webhookForm, secret: e.target.value })} placeholder="HMAC-SHA256 signing secret (optional)" />
+              <p className="text-xs text-muted-foreground">{t("admin.webhooks.secretHint")}</p>
+            </div>
+            <div className="space-y-2">
+              <Label>{t("admin.webhooks.events")}</Label>
+              <div className="flex flex-col gap-2">
+                {WEBHOOK_EVENTS.map((ev) => (
+                  <label key={ev} className="flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={webhookForm.events.includes(ev)} onChange={() => toggleWebhookEvent(ev)} />
+                    <span className="font-mono text-xs">{ev}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setShowWebhookDialog(false); setEditingWebhookId(null); }}>{t("common.cancel")}</Button>
+            <Button onClick={handleSaveWebhook} disabled={savingWebhook}>{savingWebhook ? t("common.loading") : t("common.save")}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="space-y-6">
         {sections.map((section) => (

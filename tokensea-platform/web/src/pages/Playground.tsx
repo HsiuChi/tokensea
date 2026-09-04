@@ -201,6 +201,8 @@ export function PlaygroundPage() {
   const [systemPrompt, setSystemPrompt] = useState(savedConfig.current?.systemPrompt || "")
   const [temperature, setTemperature] = useState(savedConfig.current?.temperature ?? 0.7)
   const [maxTokens, setMaxTokens] = useState(savedConfig.current?.maxTokens ?? 4096)
+  const hasFixedTemperature = model.toLowerCase().startsWith("kimi")
+  const effectiveTemperature = hasFixedTemperature ? 1 : temperature
 
   // Set default model once models are loaded
   useEffect(() => {
@@ -331,7 +333,7 @@ export function PlaygroundPage() {
         body: JSON.stringify({
           model,
           messages: apiMessages,
-          temperature,
+          temperature: effectiveTemperature,
           max_tokens: maxTokens,
           stream: true,
         }),
@@ -393,7 +395,7 @@ export function PlaygroundPage() {
       setStreaming(false)
       abortRef.current = null
     }
-  }, [input, imageUrl, messages, model, systemPrompt, temperature, maxTokens, streaming, activeChatId, jwt])
+  }, [input, imageUrl, messages, model, systemPrompt, effectiveTemperature, maxTokens, streaming, activeChatId, jwt])
 
   const stopStreaming = () => abortRef.current?.abort()
 
@@ -518,8 +520,7 @@ export function PlaygroundPage() {
                   <>
                     <SelectItem value="claude-sonnet-4-20250514">Claude Sonnet 4</SelectItem>
                     <SelectItem value="claude-opus-4-20250514">Claude Opus 4</SelectItem>
-                    <SelectItem value="gpt-4o">GPT-4o</SelectItem>
-                    <SelectItem value="gpt-4o-mini">GPT-4o Mini</SelectItem>
+                    <SelectItem value="gpt-5.5">GPT-5.5</SelectItem>
                   </>
                 )}
               </SelectContent>
@@ -725,16 +726,18 @@ export function PlaygroundPage() {
               <Separator />
               <div className="space-y-2">
                 <Label className="text-xs">
-                  {t("playground.temperature", { defaultValue: "Temperature" })}: {temperature}
+                  {t("playground.temperature", { defaultValue: "Temperature" })}: {effectiveTemperature}
+                  {hasFixedTemperature && <span className="ml-1 text-muted-foreground">({t("playground.fixedByModel", { defaultValue: "Fixed by model" })})</span>}
                 </Label>
                 <input
                   type="range"
                   min="0"
                   max="2"
                   step="0.1"
-                  value={temperature}
+                  value={effectiveTemperature}
                   onChange={(e) => setTemperature(Number(e.target.value))}
-                  className="w-full accent-primary"
+                  disabled={hasFixedTemperature}
+                  className="w-full accent-primary disabled:cursor-not-allowed disabled:opacity-50"
                 />
               </div>
               <div className="space-y-2">

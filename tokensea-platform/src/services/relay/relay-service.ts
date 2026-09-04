@@ -1,7 +1,6 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
 import type { PrismaClient, ApiKey, Plan, ChannelNode } from "@prisma/client";
 import type Redis from "ioredis";
-import { createHash } from "node:crypto";
 import { hashApiKey } from "../../lib/crypto.js";
 import { verifyToken } from "../../lib/jwt.js";
 import { redisKeys } from "../../lib/redis-keys.js";
@@ -9,6 +8,7 @@ import { unauthorized, forbidden, rateLimited, internalError, badRequest } from 
 import { SensitiveWordService } from "../sensitive/sensitive-service.js";
 import { v4 as uuid } from "uuid";
 import { selectChannel, channelsWithHealthyNodes } from "./channel-selection.js";
+import { upstreamHeaders, upstreamUrl as joinUpstreamUrl } from "../channel/upstream-request.js";
 
 interface RelayContext {
   requestId: string;
@@ -22,6 +22,7 @@ interface RelayContext {
   nodeApiKey: string;
   startedAt: Date;
   protocol: "anthropic" | "openai";
+  endpoint?: string;
   isProbe?: boolean;
 }
 
@@ -32,42 +33,15 @@ interface UsageInfo {
   cacheReadTokens: number;
 }
 
-// ---- User soft partitioning ----
-// Each user gets PARTITION_WIDTH preferred nodes via consistent hash.
-// Controls blast radius: one user can only saturate PARTITION_WIDTH nodes
-// before spilling to the global pool.
-
-const PARTITION_WIDTH = 2;
 const NODE_HEALTH_TTL_S = 30; // Redis TTL for node health cache
-const CROSS_CHANNEL_MAX_RETRIES = 3; // Max channel-level retries within a single request
+const MAX_UPSTREAM_ATTEMPTS = 20;
+const RETRYABLE_UPSTREAM_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 
 interface NodeHealth {
   avgHeadroom: number; // 0–100, average across all accounts on the node
   healthyAccounts: number;
   totalAccounts: number;
   updatedAt: number;
-}
-
-function preferredNodeIds(userId: bigint, nodeIds: bigint[], width: number = PARTITION_WIDTH): bigint[] {
-  if (nodeIds.length === 0) return [];
-  const effectiveWidth = Math.min(width, nodeIds.length);
-  const hash = parseInt(
-    createHash('sha256').update(`node-partition:${userId.toString()}`).digest('hex').slice(0, 8),
-    16,
-  );
-  const result: bigint[] = [];
-  const used = new Set<number>();
-  for (let i = 0; i < effectiveWidth; i++) {
-    let idx = (hash + i) % nodeIds.length;
-    let probe = 0;
-    while (used.has(idx) && probe < nodeIds.length) {
-      idx = (idx + 1) % nodeIds.length;
-      probe++;
-    }
-    used.add(idx);
-    result.push(nodeIds[idx]);
-  }
-  return result;
 }
 
 export class RelayService {
@@ -149,15 +123,18 @@ export class RelayService {
     const triedNodeIds = new Set<string>();
     let lastError: any;
 
-    for (let attempt = 0; attempt < CROSS_CHANNEL_MAX_RETRIES; attempt++) {
+    const maxAttempts = Math.min(Math.max(allNodes.length, 1), MAX_UPSTREAM_ATTEMPTS);
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const channel = selectChannel(channels, healthyChannelIds, triedChannelIds);
       if (!channel) break;
-      triedChannelIds.add(channel.id.toString());
 
       // Nodes for this channel
       const channelNodes = allNodes.filter((n) => n.channelId === channel.id && !triedNodeIds.has(n.id.toString()));
-      const node = this.selectNodeWithPartition(apiKey.userId, channelNodes, triedNodeIds);
-      if (!node) continue; // channel has no usable node → try next channel
+      const node = this.selectNodeFromPool(channelNodes, triedNodeIds);
+      if (!node) {
+        triedChannelIds.add(channel.id.toString());
+        continue;
+      }
       triedNodeIds.add(node.id.toString());
 
       const isAnthropicEndpoint = request.url.startsWith("/v1/messages");
@@ -180,7 +157,7 @@ export class RelayService {
         // Transparent proxy: forward to dario on the SAME path the client used.
         // dario handles both /v1/messages (Anthropic) and /v1/chat/completions (OpenAI),
         // including protocol conversion, CC passthrough, and template replay internally.
-        const upstreamUrl = `${node.internalUrl}${request.url}`;
+        const upstreamUrl = joinUpstreamUrl(node.internalUrl, request.url);
 
         // Forward ALL original headers to dario. Only replace auth.
         const headers: Record<string, string> = {};
@@ -192,7 +169,7 @@ export class RelayService {
               lower === "authorization" || lower === "x-api-key") continue;
           headers[key] = value;
         }
-        headers["x-api-key"] = node.internalApiKey;
+        Object.assign(headers, upstreamHeaders(node, request.url));
         headers["x-request-id"] = requestId;
         headers["x-tokensea-user"] = apiKey.userId.toString();
 
@@ -200,7 +177,7 @@ export class RelayService {
         // CC clients → passthrough (token swap only)
         // Non-CC clients → template replay (CC fingerprint injection)
         // Model mapping, protocol conversion — all done by dario
-        const upstreamBody = body;
+        const upstreamBody = { ...body, model: ctx.upstreamModel };
         const isStream = body.stream === true;
 
         if (isStream) {
@@ -232,11 +209,129 @@ export class RelayService {
         if (action === "continue-and-cooldown" || upStatus === 429 || upStatus === 503) {
           await this.redis.set(redisKeys.nodeCooldown(node.id), "1", "EX", 60);
         }
+        const hasRemainingNodeInChannel = allNodes.some((candidate) =>
+          candidate.channelId === channel.id && !triedNodeIds.has(candidate.id.toString()),
+        );
+        if (!hasRemainingNodeInChannel) triedChannelIds.add(channel.id.toString());
         request.log.warn({ err, requestId, channelId: channel.id.toString(), nodeId: node.id.toString(), attempt, action }, "Retrying with next channel/node");
       }
     }
 
     // All attempts exhausted
+    throw internalError(lastError?.message ?? "All upstream nodes exhausted");
+  }
+
+  /**
+   * Transparent relay for asynchronous media APIs whose paths differ between
+   * providers. Clients keep the provider suffix but authenticate with a
+   * TokenSea key: /v1/video/:model/<provider-path>.
+   */
+  async handleMediaRequest(request: FastifyRequest, reply: FastifyReply) {
+    const startedAt = new Date();
+    const requestId = uuid();
+    const apiKey = await this.resolveApiKey(request);
+
+    if (apiKey.expiresAt && apiKey.expiresAt < startedAt) throw unauthorized("API key expired");
+    if (apiKey.user.status === "disabled") throw forbidden("Account is disabled");
+
+    const params = request.params as { model?: string; "*"?: string };
+    const requestedModel = params.model;
+    if (!requestedModel) throw badRequest("Model is required");
+
+    const keyModels = apiKey.models as string[] | null;
+    const groupModels = apiKey.keyGroup?.models as string[] | null;
+    const effectiveModels = keyModels?.length ? keyModels : (groupModels?.length ? groupModels : null);
+    if (effectiveModels && !effectiveModels.includes(requestedModel)) {
+      throw forbidden(`Model ${requestedModel} not allowed on this key`);
+    }
+
+    await this.checkQuota(apiKey);
+    await this.checkRateLimit(apiKey.userId, apiKey.plan);
+
+    const body = (request.body ?? {}) as Record<string, any>;
+    const contentText = this.extractContentText(body);
+    if (contentText) {
+      const sensitiveService = new SensitiveWordService(this.prisma, this.redis);
+      const check = await sensitiveService.checkContent(contentText);
+      if (check.blocked) throw badRequest("Content contains prohibited content");
+    }
+
+    const { routes } = await this.resolveRoute(requestedModel);
+    const channels = await this.resolveChannels(routes);
+    const allNodes = await this.getHealthyNodesForChannels(channels.map((channel) => channel.id));
+    if (allNodes.length === 0) throw internalError("No available upstream nodes");
+
+    const suffix = params["*"] ?? "";
+    const queryIndex = request.url.indexOf("?");
+    const queryString = queryIndex >= 0 ? request.url.slice(queryIndex) : "";
+    const triedNodeIds = new Set<string>();
+    let lastError: any;
+
+    for (let attempt = 0; attempt < Math.min(allNodes.length, MAX_UPSTREAM_ATTEMPTS); attempt++) {
+      const node = this.selectNodeFromPool(allNodes, triedNodeIds);
+      if (!node) break;
+      triedNodeIds.add(node.id.toString());
+
+      const channel = channels.find((item) => item.id === node.channelId);
+      const upstreamModel = routes.find((route: any) => route.channelId === node.channelId)?.upstreamModel ?? requestedModel;
+      const upstreamPath = `/${upstreamModel}/${suffix}${queryString}`;
+      const endpoint = `/v1/video/${requestedModel}/${suffix}`;
+      const ctx: RelayContext = {
+        requestId,
+        apiKey: apiKey as any,
+        model: requestedModel,
+        upstreamModel,
+        channelId: node.channelId,
+        channelBillingMultiplier: channel?.billingMultiplier ?? 1,
+        nodeId: node.id,
+        nodeUrl: node.internalUrl,
+        nodeApiKey: node.internalApiKey,
+        startedAt,
+        protocol: "openai",
+        endpoint,
+      };
+
+      const headers: Record<string, string> = {};
+      for (const [key, value] of Object.entries(request.headers)) {
+        if (typeof value !== "string") continue;
+        const lower = key.toLowerCase();
+        if (["host", "connection", "transfer-encoding", "content-length", "accept-encoding", "authorization", "x-api-key"].includes(lower)) continue;
+        headers[key] = value;
+      }
+      Object.assign(headers, upstreamHeaders(node, upstreamPath));
+      headers["x-request-id"] = requestId;
+
+      const upstreamBody = { ...body };
+      if (Object.prototype.hasOwnProperty.call(upstreamBody, "model")) upstreamBody.model = upstreamModel;
+      if (Object.prototype.hasOwnProperty.call(upstreamBody, "model_name")) upstreamBody.model_name = upstreamModel;
+
+      try {
+        const method = request.method.toUpperCase();
+        const response = await fetch(joinUpstreamUrl(node.internalUrl, upstreamPath), {
+          method,
+          headers,
+          body: method === "GET" || method === "HEAD" ? undefined : JSON.stringify(upstreamBody),
+        });
+        const payload = Buffer.from(await response.arrayBuffer());
+
+        if (!response.ok && RETRYABLE_UPSTREAM_STATUSES.has(response.status)) {
+          lastError = new Error(payload.toString("utf8"));
+          lastError.statusCode = response.status;
+          await this.redis.set(redisKeys.nodeCooldown(node.id), "1", "EX", 60);
+          continue;
+        }
+
+        await this.settle(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, response.ok ? "succeeded" : "failed", response.status);
+        const contentType = response.headers.get("content-type");
+        if (contentType) reply.header("content-type", contentType);
+        reply.code(response.status).send(payload);
+        return;
+      } catch (error: any) {
+        lastError = error;
+        await this.redis.set(redisKeys.nodeCooldown(node.id), "1", "EX", 60);
+      }
+    }
+
     throw internalError(lastError?.message ?? "All upstream nodes exhausted");
   }
 
@@ -255,10 +350,8 @@ export class RelayService {
     });
 
     if (!response.ok) {
-      // For 429/503, throw to allow cross-node failover
-      if (response.status === 429 || response.status === 503) {
+      if (RETRYABLE_UPSTREAM_STATUSES.has(response.status)) {
         const errorBody = await response.text();
-        await this.settle(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", response.status);
         const err: any = new Error(errorBody);
         err.statusCode = response.status;
         throw err;
@@ -291,10 +384,8 @@ export class RelayService {
     });
 
     if (!response.ok) {
-      // For 429/503, throw to allow cross-node failover
-      if (response.status === 429 || response.status === 503) {
+      if (RETRYABLE_UPSTREAM_STATUSES.has(response.status)) {
         const errorBody = await response.text();
-        await this.settle(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", response.status);
         const err: any = new Error(errorBody);
         err.statusCode = response.status;
         throw err;
@@ -511,57 +602,27 @@ export class RelayService {
     return available;
   }
 
-  /**
-   * Select a node using user soft partitioning + headroom-aware ordering.
-   * 1. Check session affinity (Redis) — if bound node is healthy, use it
-   * 2. Compute preferred nodes for the user (consistent hash)
-   * 3. Among preferred + remaining, pick the one with best headroom
-   */
-  private selectNodeWithPartition(
-    userId: bigint,
+  /** Weighted selection across the complete key pool. Free concurrency and
+   * provider headroom both contribute, so one user's traffic is spread too. */
+  private selectNodeFromPool(
     allNodes: ChannelNode[],
     excludeIds: Set<string>,
   ): ChannelNode | null {
     const candidates = allNodes.filter(n => !excludeIds.has(n.id.toString()));
     if (candidates.length === 0) return null;
-
-    // Compute preferred node IDs via soft partitioning
-    const allNodeIds = candidates.map(n => n.id).sort((a, b) => {
-      const ba = BigInt.asUintN(64, a);
-      const bb = BigInt.asUintN(64, b);
-      return ba < bb ? -1 : ba > bb ? 1 : 0;
+    const usable = candidates.filter((node) => this.getCachedHeadroom(node.id) > 2);
+    const pool = usable.length ? usable : candidates;
+    const weights = pool.map((node) => {
+      const freeConcurrency = Math.max(1, node.maxConcurrent - node.currentLoad);
+      return Math.max(1, Math.min(freeConcurrency, this.getCachedHeadroom(node.id)));
     });
-    const preferredIds = new Set(
-      preferredNodeIds(userId, allNodeIds, PARTITION_WIDTH).map(id => id.toString()),
-    );
-
-    // Separate preferred and non-preferred, then sort each by headroom
-    const preferred: ChannelNode[] = [];
-    const rest: ChannelNode[] = [];
-    for (const node of candidates) {
-      if (preferredIds.has(node.id.toString())) {
-        preferred.push(node);
-      } else {
-        rest.push(node);
-      }
+    const total = weights.reduce((sum, value) => sum + value, 0);
+    let cursor = Math.random() * total;
+    for (let index = 0; index < pool.length; index++) {
+      cursor -= weights[index];
+      if (cursor <= 0) return pool[index];
     }
-
-    // Sort by cached headroom (desc) — preferred nodes first
-    const sortByHeadroom = (a: ChannelNode, b: ChannelNode): number => {
-      const hA = this.getCachedHeadroom(a.id);
-      const hB = this.getCachedHeadroom(b.id);
-      return hB - hA;
-    };
-    preferred.sort(sortByHeadroom);
-    rest.sort(sortByHeadroom);
-
-    // Pick: preferred first (if any have headroom > 0), then global pool
-    const preferredWithHeadroom = preferred.filter(n => this.getCachedHeadroom(n.id) > 2);
-    if (preferredWithHeadroom.length > 0) return preferredWithHeadroom[0];
-
-    // All preferred exhausted — best from global pool
-    const allSorted = [...preferred, ...rest].sort(sortByHeadroom);
-    return allSorted[0] ?? null;
+    return pool[pool.length - 1] ?? null;
   }
 
   /**
@@ -586,11 +647,15 @@ export class RelayService {
     });
 
     for (const node of nodes) {
+      if ((node as any).adapter !== "dario") {
+        this.nodeHeadroomCache.set(node.id.toString(), 50);
+        continue;
+      }
       try {
         const url = `${node.internalUrl}/accounts`;
         const resp = await fetch(url, {
           signal: AbortSignal.timeout(5_000),
-          headers: node.internalApiKey ? { "x-api-key": node.internalApiKey } : {},
+          headers: upstreamHeaders(node, "/accounts"),
         });
         if (!resp.ok) continue;
 
@@ -695,7 +760,7 @@ export class RelayService {
             requestId: ctx.requestId,
             userId: ctx.apiKey.userId,
             apiKeyId: ctx.apiKey.id,
-            endpoint: ctx.protocol === "anthropic" ? "/v1/messages" : "/v1/chat/completions",
+            endpoint: ctx.endpoint ?? (ctx.protocol === "anthropic" ? "/v1/messages" : "/v1/chat/completions"),
             requestedModel: ctx.model,
             actualUpstreamModel: ctx.upstreamModel,
             channelId: ctx.channelId,
@@ -850,11 +915,10 @@ export class RelayService {
       // Bridge through Responses API with image_generation tool
       // (codex-dario only supports /v1/chat/completions and /v1/responses, not /v1/images/generations)
       // ChatGPT accounts require stream=true, store=false, and instructions field
-      const upstreamUrl = `${node.internalUrl}/v1/responses`;
+      const upstreamUrl = joinUpstreamUrl(node.internalUrl, "/v1/responses");
       const headers: Record<string, string> = {
         "content-type": "application/json",
-        "x-api-key": node.internalApiKey,
-        authorization: `Bearer ${node.internalApiKey}`,
+        ...upstreamHeaders(node, "/v1/responses"),
         "x-request-id": requestId,
         "x-tokensea-user": apiKey.userId.toString(),
       };
@@ -1022,14 +1086,13 @@ export class RelayService {
     };
 
     try {
-      const upstreamUrl = `${node.internalUrl}/v1/images/edits`;
+      const upstreamUrl = joinUpstreamUrl(node.internalUrl, "/v1/images/edits");
       const response = await fetch(upstreamUrl, {
         method: "POST",
         headers: {
-          "x-api-key": node.internalApiKey,
+          ...upstreamHeaders(node, "/v1/images/edits"),
           "x-request-id": requestId,
           "x-tokensea-user": apiKey.userId.toString(),
-          authorization: `Bearer ${node.internalApiKey}`,
         },
         body: formData,
       });
@@ -1276,7 +1339,12 @@ export class RelayService {
 
   private extractContentText(body: any): string {
     const parts: string[] = [];
+    if (typeof body.prompt === "string") parts.push(body.prompt);
     if (body.system) parts.push(typeof body.system === "string" ? body.system : JSON.stringify(body.system));
+    for (const block of body.content ?? []) {
+      if (typeof block === "string") parts.push(block);
+      else if (typeof block?.text === "string") parts.push(block.text);
+    }
     for (const msg of body.messages ?? []) {
       if (typeof msg.content === "string") parts.push(msg.content);
       else if (Array.isArray(msg.content)) {

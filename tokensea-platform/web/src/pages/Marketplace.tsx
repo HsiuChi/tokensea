@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
   Search, Zap, Wrench, Eye, Play, Copy, Check, ArrowUpDown,
-  Terminal, Hash,
+  Terminal, Hash, Clapperboard,
 } from "lucide-react"
 
 import { VendorIcon } from "@/components/VendorIcon"
@@ -60,7 +60,7 @@ const PROVIDER_THEMES: Record<string, ProviderTheme> = {
     iconBg: "bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300",
   },
   deepseek: {
-    label: "DeepSeek",
+    label: "深度求索",
     bar: "bg-violet-500",
     badge: "bg-violet-50 text-violet-700 dark:bg-violet-500/10 dark:text-violet-300",
     light: "bg-violet-500/10 text-violet-600",
@@ -88,11 +88,53 @@ const PROVIDER_THEMES: Record<string, ProviderTheme> = {
     iconBg: "bg-amber-50 text-amber-600 dark:bg-amber-500/15 dark:text-amber-300",
   },
   qwen: {
-    label: "Qwen",
+    label: "通义千问",
     bar: "bg-indigo-500",
     badge: "bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300",
     light: "bg-indigo-500/10 text-indigo-600",
     iconBg: "bg-indigo-50 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-300",
+  },
+  moonshot: {
+    label: "月之暗面",
+    bar: "bg-blue-500",
+    badge: "bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300",
+    light: "bg-blue-500/10 text-blue-600",
+    iconBg: "bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300",
+  },
+  zhipu: {
+    label: "智谱 AI",
+    bar: "bg-blue-600",
+    badge: "bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300",
+    light: "bg-blue-500/10 text-blue-600",
+    iconBg: "bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300",
+  },
+  xiaomi: {
+    label: "小米 MiMo",
+    bar: "bg-orange-500",
+    badge: "bg-orange-50 text-orange-700 dark:bg-orange-500/10 dark:text-orange-300",
+    light: "bg-orange-500/10 text-orange-600",
+    iconBg: "bg-orange-50 text-orange-600 dark:bg-orange-500/15 dark:text-orange-300",
+  },
+  volcengine: {
+    label: "火山引擎",
+    bar: "bg-red-500",
+    badge: "bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300",
+    light: "bg-red-500/10 text-red-600",
+    iconBg: "bg-red-50 text-red-600 dark:bg-red-500/15 dark:text-red-300",
+  },
+  kling: {
+    label: "可灵 AI",
+    bar: "bg-blue-500",
+    badge: "bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300",
+    light: "bg-blue-500/10 text-blue-600",
+    iconBg: "bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300",
+  },
+  minimax: {
+    label: "MiniMax 海螺",
+    bar: "bg-cyan-500",
+    badge: "bg-cyan-50 text-cyan-700 dark:bg-cyan-500/10 dark:text-cyan-300",
+    light: "bg-cyan-500/10 text-cyan-600",
+    iconBg: "bg-cyan-50 text-cyan-600 dark:bg-cyan-500/15 dark:text-cyan-300",
   },
   doubao: {
     label: "Doubao",
@@ -123,16 +165,27 @@ function getProviderTheme(provider?: string): ProviderTheme {
 
 // Guess vendor icon name from model alias
 const CATEGORY_LABELS: Record<string, string> = {
-  chat: "Chat",
-  code: "Code",
-  vision: "Vision",
-  embedding: "Embedding",
-  audio: "Audio",
-  image: "Image",
-  video: "Video",
+  chat: "marketplace.categoryChat",
+  code: "marketplace.categoryCode",
+  vision: "marketplace.categoryVision",
+  embedding: "marketplace.categoryEmbedding",
+  audio: "marketplace.categoryAudio",
+  image: "marketplace.categoryImage",
+  video: "marketplace.categoryVideo",
+}
+
+const CORE_CATEGORIES = ["chat", "vision", "video", "image", "audio"]
+
+function getCategoryLabel(category: string, t: any) {
+  return CATEGORY_LABELS[category] ? t(CATEGORY_LABELS[category]) : category
 }
 
 const MAX_CONTEXT_REF = 200_000
+
+function getPublicDescription(description?: string | null) {
+  if (!description || /^由金山云(?:星流)?接入/.test(description.trim())) return ""
+  return description
+}
 
 type SortMode = "default" | "priceAsc" | "priceDesc" | "contextDesc"
 
@@ -193,6 +246,11 @@ export function MarketplacePage() {
     return list
   }, [models, search, sortMode])
 
+  const visibleCategories = useMemo(
+    () => [...CORE_CATEGORIES, ...categories.filter((category) => !CORE_CATEGORIES.includes(category))],
+    [categories],
+  )
+
   return (
     <div className="space-y-7">
       {/* Header */}
@@ -238,7 +296,7 @@ export function MarketplacePage() {
             >
               {t("marketplace.allCategories")}
             </button>
-            {categories.map((cat) => (
+            {visibleCategories.map((cat) => (
               <button
                 key={cat}
                 onClick={() => setSelectedCategory(cat)}
@@ -248,7 +306,7 @@ export function MarketplacePage() {
                     : "bg-slate-50 text-slate-600 hover:bg-slate-100 dark:bg-slate-800/50 dark:text-slate-400 dark:hover:bg-slate-800"
                 }`}
               >
-                {CATEGORY_LABELS[cat] || cat}
+                {getCategoryLabel(cat, t)}
               </button>
             ))}
           </div>
@@ -286,7 +344,7 @@ export function MarketplacePage() {
           {/* Results count */}
           {!loading && (
             <p className="text-xs font-bold text-slate-400">
-              {filteredSorted.length} {filteredSorted.length === 1 ? "model" : "models"}
+              {t("marketplace.modelCount", { count: filteredSorted.length })}
             </p>
           )}
 
@@ -305,6 +363,10 @@ export function MarketplacePage() {
             <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
               {filteredSorted.map((m: any) => (
                 <ModelCard key={m.id || m.alias} model={m} onClick={() => setSelectedModel(m)} t={t} onTry={() => {
+                  if (m.category === "video") {
+                    setSelectedModel(m)
+                    return
+                  }
                   const mode = m.category === "image" ? "image" : "chat"
                   navigate(`/app/chat?model=${encodeURIComponent(m.alias)}&mode=${mode}`)
                 }} />
@@ -357,6 +419,8 @@ function ProviderPill({
 
 function ModelCard({ model, onClick, t, onTry }: { model: any; onClick: () => void; t: any; onTry: () => void }) {
   const theme = getProviderTheme(model.provider)
+  const description = getPublicDescription(model.description)
+  const isVideo = model.category === "video"
   const ctx = model.maxContext || 0
   const ctxPct = Math.min((ctx / MAX_CONTEXT_REF) * 100, 100)
   return (
@@ -388,12 +452,17 @@ function ModelCard({ model, onClick, t, onTry }: { model: any; onClick: () => vo
         </div>
 
         {/* Description */}
-        {model.description && (
-          <p className="text-xs text-slate-500 leading-relaxed line-clamp-2 dark:text-slate-400">{model.description}</p>
+        {description && (
+          <p className="text-xs text-slate-500 leading-relaxed line-clamp-2 dark:text-slate-400">{description}</p>
         )}
 
         {/* Capabilities */}
         <div className="flex flex-wrap gap-1.5">
+          {isVideo && (
+            <span className="inline-flex items-center gap-1 rounded-lg bg-fuchsia-50 px-2 py-0.5 text-[10px] font-bold text-fuchsia-600 dark:bg-fuchsia-500/10 dark:text-fuchsia-300">
+              <Clapperboard className="h-2.5 w-2.5" /> {t("marketplace.asyncVideo")}
+            </span>
+          )}
           {model.supportsStream && (
             <span className="inline-flex items-center gap-1 rounded-lg bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-600 dark:bg-blue-500/10 dark:text-blue-300">
               <Zap className="h-2.5 w-2.5" /> {t("marketplace.stream")}
@@ -412,7 +481,7 @@ function ModelCard({ model, onClick, t, onTry }: { model: any; onClick: () => vo
         </div>
 
         {/* Context window bar */}
-        <div>
+        {!isVideo && <div>
           <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 mb-1">
             <span>{t("marketplace.contextWindow")}</span>
             <span>{ctx ? `${(ctx / 1000).toFixed(0)}K` : "—"}</span>
@@ -423,19 +492,23 @@ function ModelCard({ model, onClick, t, onTry }: { model: any; onClick: () => vo
               style={{ width: `${ctxPct}%`, opacity: ctxPct < 5 ? 0.6 : 1 }}
             />
           </div>
-        </div>
+        </div>}
 
         {/* Pricing row — $/M tokens */}
-        <div className="flex items-center justify-between text-[11px] font-medium pt-2 border-t border-slate-100 dark:border-slate-800/60">
-          <span className="text-slate-500 dark:text-slate-400">Input <span className="font-bold text-slate-800 dark:text-slate-200 font-mono">${model.inputPrice}/M</span></span>
+        {!isVideo ? <div className="flex items-center justify-between text-[11px] font-medium pt-2 border-t border-slate-100 dark:border-slate-800/60">
+          <span className="text-slate-500 dark:text-slate-400">{t("marketplace.inputPrice")} <span className="font-bold text-slate-800 dark:text-slate-200 font-mono">${model.inputPrice}/M</span></span>
           {model.cacheReadPrice > 0 && (
-            <span className="text-slate-500 dark:text-slate-400">Cache <span className="font-bold text-emerald-600 dark:text-emerald-400 font-mono">${model.cacheReadPrice}/M</span></span>
+            <span className="text-slate-500 dark:text-slate-400">{t("marketplace.cachePrice")} <span className="font-bold text-emerald-600 dark:text-emerald-400 font-mono">${model.cacheReadPrice}/M</span></span>
           )}
-          <span className="text-slate-500 dark:text-slate-400">Output <span className="font-bold text-slate-800 dark:text-slate-200 font-mono">${model.outputPrice}/M</span></span>
-        </div>
+          <span className="text-slate-500 dark:text-slate-400">{t("marketplace.outputPrice")} <span className="font-bold text-slate-800 dark:text-slate-200 font-mono">${model.outputPrice}/M</span></span>
+        </div> : (
+          <div className="rounded-xl border border-fuchsia-100 bg-fuchsia-50/70 px-3 py-2 text-[11px] font-semibold text-fuchsia-700 dark:border-fuchsia-900/60 dark:bg-fuchsia-500/10 dark:text-fuchsia-300">
+            {t("marketplace.videoBillingHint")}
+          </div>
+        )}
         {/* Multi-tier pricing hint */}
         {model.pricing?.tiers?.length > 1 && (
-          <p className="text-[10px] text-blue-500 font-bold pt-1">{model.pricing.tiers.length} pricing tiers →</p>
+          <p className="text-[10px] text-blue-500 font-bold pt-1">{t("marketplace.pricingTiers", { count: model.pricing.tiers.length })}</p>
         )}
         {/* Try button — compact, bottom-right */}
         <div className="flex justify-end pt-1.5">
@@ -443,7 +516,8 @@ function ModelCard({ model, onClick, t, onTry }: { model: any; onClick: () => vo
             onClick={(e) => { e.stopPropagation(); onTry() }}
             className="rounded-lg bg-blue-600 px-2.5 py-1 text-[10px] font-bold text-white shadow-sm hover:bg-blue-700 transition-colors"
           >
-            <Play className="inline h-2.5 w-2.5 mr-0.5 -mt-px" /> {t("marketplace.tryInPlayground")}
+            {isVideo ? <Terminal className="inline h-2.5 w-2.5 mr-0.5 -mt-px" /> : <Play className="inline h-2.5 w-2.5 mr-0.5 -mt-px" />}
+            {isVideo ? t("marketplace.viewApiUsage") : t("marketplace.tryInPlayground")}
           </button>
         </div>
       </div>
@@ -451,11 +525,63 @@ function ModelCard({ model, onClick, t, onTry }: { model: any; onClick: () => vo
   )
 }
 
+function getCurlExample(model: any) {
+  const alias = model.alias
+  if (model.category !== "video") {
+    return `curl https://api.tokensea.dev/v1/chat/completions \\
+  -H "Authorization: Bearer YOUR_TOKENSEA_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "${alias}",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'`
+  }
+
+  if (alias.startsWith("seedance")) {
+    return `curl https://api.tokensea.dev/v1/video/${alias}/v3/contents/generations/tasks \\
+  -H "Authorization: Bearer YOUR_TOKENSEA_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "${alias}",
+    "content": [{"type": "text", "text": "海边日落的电影感镜头"}],
+    "ratio": "16:9",
+    "duration": 5,
+    "generate_audio": true
+  }'`
+  }
+
+  if (alias.startsWith("kling")) {
+    return `curl https://api.tokensea.dev/v1/video/${alias}/v1/videos/text2video \\
+  -H "Authorization: Bearer YOUR_TOKENSEA_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model_name": "${alias}",
+    "prompt": "海边日落的电影感镜头",
+    "duration": "5",
+    "mode": "std",
+    "sound": "on",
+    "aspect_ratio": "16:9"
+  }'`
+  }
+
+  return `curl https://api.tokensea.dev/v1/video/${alias}/v1/video_generation \\
+  -H "Authorization: Bearer YOUR_TOKENSEA_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "${alias}",
+    "prompt": "海边日落的电影感镜头",
+    "duration": 6,
+    "resolution": "768P"
+  }'`
+}
+
 function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => void }) {
   const [copied, setCopied] = useState(false)
   const theme = getProviderTheme(model.provider)
+  const description = getPublicDescription(model.description)
   const tags = (model.tags as string[]) ?? []
   const routes = (model.routes as any[]) ?? []
+  const isVideo = model.category === "video"
 
   const copyAlias = async () => {
     try {
@@ -465,13 +591,7 @@ function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => voi
     } catch {}
   }
 
-  const curlExample = `curl https://api.tokensea.dev/v1/chat/completions \\
-  -H "Authorization: Bearer YOUR_API_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "${model.alias}",
-    "messages": [{"role": "user", "content": "Hello!"}]
-  }'`
+  const curlExample = getCurlExample(model)
 
   return (
     <div className="p-7 space-y-6">
@@ -486,7 +606,7 @@ function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => voi
               <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${theme.badge}`}>{theme.label}</span>
               {model.category && (
                 <span className="rounded-full border border-slate-200 px-2 py-0.5 text-[10px] font-bold text-slate-600 dark:border-slate-700 dark:text-slate-400">
-                  {CATEGORY_LABELS[model.category] || model.category}
+                  {getCategoryLabel(model.category, t)}
                 </span>
               )}
             </div>
@@ -512,7 +632,7 @@ function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => voi
         </div>
       </div>
 
-      {model.description && <p className="text-sm text-slate-500 leading-relaxed dark:text-slate-400">{model.description}</p>}
+      {description && <p className="text-sm text-slate-500 leading-relaxed dark:text-slate-400">{description}</p>}
 
       {/* Tags */}
       {tags.length > 0 && (
@@ -531,7 +651,16 @@ function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => voi
       {/* Capabilities */}
       <div>
         <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">{t("marketplace.capabilities")}</p>
-        <div className="grid grid-cols-3 gap-3">
+        {isVideo ? (
+          <div className="grid grid-cols-1 gap-3">
+            <CapabilityTile
+              active
+              icon={<Clapperboard className="h-4 w-4" />}
+              label={t("marketplace.asyncVideo")}
+              activeColor="text-fuchsia-500 bg-fuchsia-50 dark:bg-fuchsia-500/10"
+            />
+          </div>
+        ) : <div className="grid grid-cols-3 gap-3">
           <CapabilityTile
             active={model.supportsStream}
             icon={<Zap className="h-4 w-4" />}
@@ -550,11 +679,15 @@ function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => voi
             label={t("marketplace.vision")}
             activeColor="text-emerald-500 bg-emerald-50 dark:bg-emerald-500/10"
           />
-        </div>
+        </div>}
       </div>
 
       {/* Pricing — $/M tokens */}
-      <div>
+      {isVideo ? (
+        <div className="rounded-2xl border border-fuchsia-100 bg-fuchsia-50/70 p-4 text-sm font-semibold text-fuchsia-700 dark:border-fuchsia-900/60 dark:bg-fuchsia-500/10 dark:text-fuchsia-300">
+          {t("marketplace.videoBillingDetail")}
+        </div>
+      ) : <div>
         <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">{t("marketplace.pricing")}</p>
         {model.pricing?.tiers ? (
           /* Multi-tier pricing table (GPT short/long context, etc.) */
@@ -580,8 +713,8 @@ function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => voi
                       output: "border-blue-200 bg-blue-50/70 dark:border-blue-800 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300",
                     }
                     const labels: Record<string,string> = {
-                      input: "Input", cachedInput: "Cached Input", output: "Output",
-                      cacheWrite5m: "5m Cache Write", cacheWrite1h: "1h Cache Write", cacheRead: "Cache Read",
+                      input: t("marketplace.inputPrice"), cachedInput: t("marketplace.cachedInput"), output: t("marketplace.outputPrice"),
+                      cacheWrite5m: t("marketplace.cacheWrite5m"), cacheWrite1h: t("marketplace.cacheWrite1h"), cacheRead: t("marketplace.cacheRead"),
                     }
                     const c = colors[dim] || colors.input
                     return (
@@ -600,11 +733,11 @@ function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => voi
           <>
             <div className="grid grid-cols-3 gap-3 text-center">
               <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-900/50">
-                <p className="text-[10px] text-slate-400 font-bold">Base Input</p>
+                <p className="text-[10px] text-slate-400 font-bold">{t("marketplace.baseInput")}</p>
                 <p className="text-lg font-black text-slate-900 dark:text-slate-100 font-mono">${model.inputPrice}/M</p>
               </div>
               <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-900/50">
-                <p className="text-[10px] text-slate-400 font-bold">Output</p>
+                <p className="text-[10px] text-slate-400 font-bold">{t("marketplace.outputPrice")}</p>
                 <p className="text-lg font-black text-slate-900 dark:text-slate-100 font-mono">${model.outputPrice}/M</p>
               </div>
               <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-900/50">
@@ -615,27 +748,27 @@ function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => voi
             <div className="grid grid-cols-3 gap-3 text-center mt-3">
               {model.cacheWrite5mPrice > 0 && (
                 <div className="rounded-2xl border border-orange-200 bg-orange-50/70 p-3 dark:border-orange-800 dark:bg-orange-900/20">
-                  <p className="text-[10px] text-orange-500 font-bold">5m Cache Write</p>
+                  <p className="text-[10px] text-orange-500 font-bold">{t("marketplace.cacheWrite5m")}</p>
                   <p className="text-lg font-black text-orange-700 dark:text-orange-300 font-mono">${model.cacheWrite5mPrice}/M</p>
                 </div>
               )}
               {model.cacheWrite1hPrice > 0 && (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-3 dark:border-amber-800 dark:bg-amber-900/20">
-                  <p className="text-[10px] text-amber-500 font-bold">1h Cache Write</p>
+                  <p className="text-[10px] text-amber-500 font-bold">{t("marketplace.cacheWrite1h")}</p>
                   <p className="text-lg font-black text-amber-700 dark:text-amber-300 font-mono">${model.cacheWrite1hPrice}/M</p>
                 </div>
               )}
               {model.cacheReadPrice > 0 && (
                 <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3 dark:border-emerald-800 dark:bg-emerald-900/20">
-                  <p className="text-[10px] text-emerald-500 font-bold">Cache Read</p>
+                  <p className="text-[10px] text-emerald-500 font-bold">{t("marketplace.cacheRead")}</p>
                   <p className="text-lg font-black text-emerald-700 dark:text-emerald-300 font-mono">${model.cacheReadPrice}/M</p>
                 </div>
               )}
             </div>
           </>
         )}
-        <p className="text-[10px] text-slate-400 text-center mt-2">per 1M tokens</p>
-      </div>
+        <p className="text-[10px] text-slate-400 text-center mt-2">{t("marketplace.per1mTokens")}</p>
+      </div>}
 
       {/* Routes */}
       {routes.length > 0 && (
@@ -672,9 +805,11 @@ function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => voi
         </div>
       </div>
 
-      <Button className="w-full h-12 rounded-xl font-bold shadow-lg shadow-blue-500/25" onClick={onTry}>
-        <Play className="mr-2 h-4 w-4" /> {t("marketplace.tryInPlayground")}
-      </Button>
+      {!isVideo && (
+        <Button className="w-full h-12 rounded-xl font-bold shadow-lg shadow-blue-500/25" onClick={onTry}>
+          <Play className="mr-2 h-4 w-4" /> {t("marketplace.tryInPlayground")}
+        </Button>
+      )}
     </div>
   )
 }

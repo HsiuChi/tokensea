@@ -1,0 +1,13 @@
+{
+  email admin@xuexin.xyz
+}
+
+xuexin.xyz {
+  encode gzip zstd
+  reverse_proxy app:3000
+}
+
+http://47.236.57.75 {
+  encode gzip zstd
+  reverse_proxy app:3000
+}

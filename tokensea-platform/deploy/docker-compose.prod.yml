@@ -1,0 +1,74 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tokensea
+      POSTGRES_USER: tokensea
+      POSTGRES_PASSWORD: tokensea
+    volumes:
+      - tokensea_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tokensea -d tokensea"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - tokensea_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: tokensea-platform:release
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      DATABASE_URL: postgresql://tokensea:tokensea@postgres:5432/tokensea
+      REDIS_URL: redis://redis:6379
+      NODE_ENV: production
+      PORT: 3000
+      FRONTEND_URL: https://xuexin.xyz
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - tokensea_caddy_data:/data
+      - tokensea_caddy_config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+
+volumes:
+  tokensea_pg_data:
+  tokensea_redis_data:
+  tokensea_caddy_data:
+  tokensea_caddy_config:

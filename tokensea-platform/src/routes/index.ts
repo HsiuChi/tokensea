@@ -14,6 +14,7 @@ import { oauthRoutes } from "./oauth.js";
 import { publicRoutes } from "./public.js";
 import { subscriptionRoutes } from "./subscription.js";
 import { sensitiveRoutes } from "./sensitive.js";
+import { webhookRoutes } from "./webhook.js";
 
 export async function registerRoutes(app: FastifyInstance) {
   // Health check
@@ -60,6 +61,9 @@ export async function registerRoutes(app: FastifyInstance) {
 
   // Sensitive words (admin)
   await app.register(sensitiveRoutes, { prefix: "/api/sensitive" });
+
+  // Webhooks (admin)
+  await app.register(webhookRoutes, { prefix: "/api/webhook" });
 
   // Relay (v1/*)
   await app.register(relayRoutes);

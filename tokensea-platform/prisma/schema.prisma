@@ -342,7 +342,11 @@ model ChannelNode {
   channelId            BigInt
   name                 String       @db.VarChar(64)
   internalUrl          String       @db.VarChar(256)
-  internalApiKey       String       @db.VarChar(128)
+  internalApiKey       String       @db.Text
+  keyFingerprint       String?      @db.VarChar(64)
+  keyPrefix            String?      @db.VarChar(24)
+  adapter              String       @default("dario") @db.VarChar(32)
+  authType             String       @default("x-api-key") @db.VarChar(32)
   status               NodeStatus   @default(healthy)
   accountId            String?      @db.VarChar(64)
   oauthExpiresAt       DateTime?
@@ -364,6 +368,7 @@ model ChannelNode {
   channel              Channel      @relation(fields: [channelId], references: [id])
 
   @@index([channelId, status])
+  @@unique([channelId, keyFingerprint])
   @@map("channel_nodes")
 }
 
@@ -542,4 +547,16 @@ model Announcement {
 
   @@index([status, pinned, createdAt(sort: Desc)])
   @@map("announcements")
+}
+
+model Webhook {
+  id        BigInt   @id @default(autoincrement())
+  url       String   @db.VarChar(512)
+  events    Json     @default("[]")
+  secret    String?  @db.VarChar(128)
+  status    String   @default("active") @db.VarChar(16)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("webhooks")
 }
