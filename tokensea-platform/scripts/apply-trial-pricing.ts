@@ -5,7 +5,9 @@ import { trialPrice, TRIAL_VERSION } from '../src/services/billing/trial-pricing
 
 const prisma = new PrismaClient();
 const encode = (v:unknown) => JSON.stringify(v, (_,x)=>typeof x==='bigint'?x.toString():x, 2);
-const canonical = (v:any):string => JSON.stringify(v,(_,x)=>x && typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
+// Prisma/JSONB can round the last binary-float digit. Retail rates have 9 decimals;
+// ignore only sub-precision noise in estimated internal cost metadata.
+const canonical = (v:any):string => JSON.stringify(v,(_,x)=>typeof x==='number'?Number(x.toPrecision(14)):x && typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
 const apply = process.argv.includes('--apply');
 try {
   await prisma.$transaction(async tx => {

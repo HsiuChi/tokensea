@@ -9,6 +9,8 @@ try {
   const m=await p.modelAlias.create({data:{alias:'gpt-5.6-sol',displayName:'Sol',provider:'openai',inputPrice:4,outputPrice:20}});
   const c=await p.channel.create({data:{name:'pricing-test',type:'codex',models:[],billingMultiplier:1.5}});
   await p.modelRoute.create({data:{aliasId:m.id,channelId:c.id,upstreamModel:m.alias}});
+  const ksp=await p.modelAlias.create({data:{alias:'kimi-k3',displayName:'Kimi',provider:'moonshot',pricing:{upstreamCny:{input:20,output:100,cacheRead:2}}}});
+  await p.modelRoute.create({data:{aliasId:ksp.id,channelId:c.id,upstreamModel:ksp.alias}});
   const u=await p.user.create({data:{username:'price_test',passwordHash:'not-login',inviteCode:'price_test',quota:10000000n}});
   const k=await p.apiKey.create({data:{userId:u.id,name:'test',keyHash:randomUUID(),keyPrefix:'test',quota:-1n}});
   const svc=new ReservationService(p), old=randomUUID(), body={max_tokens:100,prompt:'hi'};
