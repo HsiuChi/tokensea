@@ -927,7 +927,8 @@ export class RelayService {
       });
       if (!response.ok) {
         const errorBody = await response.text();
-        await this.settleImage(ctx, openAiUsage(), "failed", response.status, path);
+        await this.settleImage(ctx, openAiUsage(), "failed", response.status, path, safeErrorCode(errorBody, response.status));
+        await this.reportUpstreamFailure(ctx, response.status, safeErrorCode(errorBody, response.status));
         reply.code(response.status).send(errorBody);
         return;
       }
@@ -1034,7 +1035,8 @@ export class RelayService {
 
       if (!response.ok) {
         const errorBody = await response.text();
-        await this.settleImage(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", response.status, "/v1/images/edits");
+        await this.settleImage(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", response.status, "/v1/images/edits", safeErrorCode(errorBody, response.status));
+        await this.reportUpstreamFailure(ctx, response.status, safeErrorCode(errorBody, response.status));
         reply.code(response.status).send(errorBody);
         return;
       }

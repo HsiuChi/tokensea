@@ -79,3 +79,37 @@ test("fragment-safe SSE parser recognizes cumulative Responses usage",()=>{
   const u=svc.extractTokensFromSSE('data: {"type":"response.completed","response":{"usage":{"input_tokens":100,"output_tokens":9,"input_tokens_details":{"cached_tokens":70}}}}\n',"openai");
   assert.equal(u.inputTokens,30);assert.equal(u.cacheReadTokens,70);assert.equal(u.outputTokens,9);
 });
+
+test("native image route preserves requested model and records modality usage", async()=>{
+  const service = new RelayService({}, {});
+  service.resolveApiKey = async()=>({id:1n,userId:1n,user:{status:"active"},models:[]});
+  service.checkQuota = async()=>{};service.checkRateLimit = async()=>{};
+  service.resolveRoute = async()=>({alias:{},routes:[{channelId:2n,upstreamModel:"gpt-image-2"}]});
+  service.resolveChannels = async()=>[{id:2n,billingMultiplier:1}];
+  service.getHealthyNodesForChannels = async()=>[{id:2n,channelId:2n,internalUrl:"http://cpa:8080",internalApiKey:"test-only",adapter:"cpa"}];
+  let settled;
+  service.settleImage = async(...args)=>{settled=args};
+  const original=globalThis.fetch;
+  const reply={code(status){this.status=status;return this},send(data){this.data=data;return this}};
+  try {
+    globalThis.fetch=async(url,options)=>{
+      assert.equal(url,"http://cpa:8080/v1/images/generations");assert.equal(JSON.parse(options.body).model,"gpt-image-2");
+      return new Response(JSON.stringify({data:[{b64_json:"test"}],usage:{input_tokens:14,input_tokens_details:{image_tokens:0,text_tokens:14},output_tokens:229}}),{status:200});
+    };
+    await service.handleImageGeneration({body:{model:"gpt-image-2"},query:{},log:{error(){}}},reply);
+    assert.equal(reply.status,200);assert.equal(reply.data.data[0].b64_json,"test");
+    assert.equal(settled[0].upstreamModel,"gpt-image-2");assert.equal(settled[1].outputTokens,229);
+  } finally {globalThis.fetch=original}
+});
+test("streaming usage survives arbitrary network chunk boundaries without cumulative overcount",async()=>{
+  const service=new RelayService({},{});let settled;
+  service.settle=async(...args)=>{settled=args};
+  const original=globalThis.fetch;
+  const text='data: {"type":"response.completed","response":{"usage":{"input_tokens":100,"output_tokens":9,"input_tokens_details":{"cached_tokens":70}}}}\n\n';
+  const bytes=new TextEncoder().encode(text);
+  try{
+    globalThis.fetch=async()=>new Response(new ReadableStream({start(c){for(let i=0;i<bytes.length;i+=7)c.enqueue(bytes.slice(i,i+7));c.close()}}));
+    await service.handleStreamRequest({log:{error(){}}},{raw:{writeHead(){},write(){},end(){}}},"http://test",{}, {}, {protocol:"openai"});
+    assert.equal(settled[1].inputTokens,30);assert.equal(settled[1].cacheReadTokens,70);assert.equal(settled[1].outputTokens,9);assert.equal(settled[2],"succeeded");
+  }finally{globalThis.fetch=original}
+});
