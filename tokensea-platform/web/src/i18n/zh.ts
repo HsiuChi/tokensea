@@ -249,9 +249,10 @@ const zh = {
     usageTrendDesc: "过去7天的 API 用量",
   },
   keys: {
+    createdAt: "创建时间",
     title: "API 密钥",
     subtitle: "管理您访问 TokenSea 的 API 密钥",
-    createKey: "+ 创建密钥",
+    createKey: "创建密钥",
     keyCreated: "密钥已创建！",
     copyWarning: "请立即复制密钥，之后将无法再次查看。",
     copyKey: "复制密钥",

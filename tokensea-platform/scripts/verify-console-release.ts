@@ -29,10 +29,14 @@ try {
   await set({quota:"100000",expiresAt:"2020-01-01T00:00:00.000Z"});assert.equal((await request("/v1/chat/completions",sample,key)).status,401);
   await set({expiresAt:null,models:["gpt-image-2"]});assert.equal((await request("/v1/chat/completions",sample,key)).status,403);
   await set({models:["gpt-6-astra","gpt-image-2"]});
+  const configuredChannel=await p.channel.findUniqueOrThrow({where:{id:2}});
+  const savedKey=await p.apiKey.findUniqueOrThrow({where:{id:apiKey.id},include:{plan:true}});
+  const planMultiplier=savedKey.plan?.billingMultiplier??1;
+  const channelMultiplier=configuredChannel.billingMultiplier;
   const chat=await request("/v1/chat/completions",sample,key);assert.equal(chat.status,200);assert.equal(chat.d.model,"gpt-6-astra");
   const chatLog=await p.requestLog.findFirst({where:{userId:user.id,requestedModel:"gpt-6-astra"}});
   assert(chatLog && chatLog.billableUnits>0n);
-  assert.equal(chatLog.billableUnits,calculateTokenPrice(REVIEWED_OPENAI_MODELS[0],openAiUsage(chat.d.usage)).billableUnits);
+  assert.equal(chatLog.billableUnits,calculateTokenPrice(REVIEWED_OPENAI_MODELS[0],openAiUsage(chat.d.usage),planMultiplier,channelMultiplier).billableUnits);
   const detail=await request("/api/log/self/"+chatLog.requestId);assert.equal(detail.status,200);assert(!("nodeId" in detail.d.data));assert.equal(detail.d.data.pricingDetail.version,2);
   const stats=await request("/api/log/self/stats?period=24h");assert.equal(stats.d.data.quality.totalRequests,1);assert.equal(stats.d.data.quality.successRate,100);
   const csv=await request("/api/log/self/export");assert(csv.d.data.csv.includes(chatLog.requestId));
@@ -41,10 +45,10 @@ try {
     const img=await request("/v1/images/generations",{model:"gpt-image-2",prompt:"One blue dot on white",quality:"low",size:"1024x1024",n:1},key);
     assert.equal(img.status,200);assert(img.d.data[0].b64_json);
     const log=await p.requestLog.findFirst({where:{userId:user.id,requestedModel:"gpt-image-2"}});
-    assert(log && log.billableUnits>0n);assert.equal(log.billableUnits,calculateTokenPrice(REVIEWED_OPENAI_MODELS[1],openAiUsage(img.d.usage)).billableUnits);
+    assert(log && log.billableUnits>0n);assert.equal(log.billableUnits,calculateTokenPrice(REVIEWED_OPENAI_MODELS[1],openAiUsage(img.d.usage),planMultiplier,channelMultiplier).billableUnits);
     imageChecked=true;
   }
-  console.log(JSON.stringify({passed:true,keyPolicies:true,adminAccessDenied:true,chatBilling:true,requestDetail:true,statistics:true,csv:true,imageBilling:imageChecked}));
+  console.log(JSON.stringify({passed:true,planMultiplier,channelMultiplier,keyPolicies:true,adminAccessDenied:true,chatBilling:true,requestDetail:true,statistics:true,csv:true,imageBilling:imageChecked}));
 } finally {
   // Only fixtures created by this invocation are removed; no user data is touched.
   await p.$transaction(async tx=>{

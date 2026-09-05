@@ -249,9 +249,10 @@ const en = {
     usageTrendDesc: "Your API usage over the past 7 days",
   },
   keys: {
+    createdAt: "Created at",
     title: "API Keys",
     subtitle: "Manage your API keys for accessing TokenSea",
-    createKey: "+ Create Key",
+    createKey: "Create Key",
     keyCreated: "Key Created!",
     copyWarning: "Copy your key now. You won't be able to see it again.",
     copyKey: "Copy Key",
