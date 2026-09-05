@@ -111,8 +111,8 @@ export function DashboardPage() {
   const maskedKey = rawKey
     ? `${rawKey.slice(0, 8)}${"•".repeat(12)}${rawKey.slice(-4)}`
     : activeKey?.keyPrefix ? `${activeKey.keyPrefix}${"•".repeat(16)}` : "尚未创建 API 密钥"
-  const defaultModel = models[0]?.id ?? "gpt-5.6-sol"
-  const curlPreview = `curl ${baseUrl}/chat/completions \\\n+  -H "Authorization: Bearer ${maskedKey}" \\\n+  -H "Content-Type: application/json" \\\n+  -d '{"model":"${defaultModel}","messages":[{"role":"user","content":"你好"}]}'`
+  const defaultModel = models.find(m => m.category === "chat")?.id ?? "gpt-5.6-sol"
+  const curlPreview = `curl ${baseUrl}/chat/completions \\\n  -H "Authorization: Bearer ${maskedKey}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"model":"${defaultModel}","messages":[{"role":"user","content":"你好"}]}'`
   const curlCommand = rawKey ? curlPreview.replace(maskedKey, rawKey) : curlPreview
   const remainingQuota = Math.max(Number(user?.quota || 0) - Number(user?.usedQuota || 0), 0)
   const dayTotals = dayStats?.totals ?? {}
