@@ -60,6 +60,7 @@ services:
   # The DARIO_API_KEY must match the corresponding key in config.yaml.
 
   dario-1:
+    profiles: ["dario"]
     build:
       context: ./dario-modified
       dockerfile: tokensea-Dockerfile

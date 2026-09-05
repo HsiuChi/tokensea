@@ -2,7 +2,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import { badRequest, notFound } from "../../lib/errors.js";
 import { encryptUpstreamSecret, maskUpstreamSecret, upstreamSecretFingerprint } from "../../lib/upstream-secret.js";
 import { KSYUN_MODELS } from "../../config/ksyun-model-catalog.js";
-import { upstreamHeaders, upstreamUrl } from "./upstream-request.js";
+import { probeCpa, upstreamHeaders, upstreamUrl } from "./upstream-request.js";
 
 type NodeInput = {
   name: string;
@@ -71,8 +71,8 @@ export class ChannelService {
       keyFingerprint: upstreamSecretFingerprint(rawKey),
       keyPrefix: maskUpstreamSecret(rawKey),
       adapter: data.adapter ?? "dario",
-      authType: data.authType ?? "x-api-key",
-      probePath: data.probePath,
+      authType: data.adapter === "cpa" ? "bearer" : data.authType ?? "x-api-key",
+      probePath: data.adapter === "cpa" ? "/v1/models" : data.probePath,
       probeTimeoutMs: data.probeTimeoutMs ?? 5000,
       maxConcurrent: data.maxConcurrent ?? 5,
     }});
@@ -170,6 +170,41 @@ export class ChannelService {
     return { channelId: savedChannel.id, addedKeys, totalSubmittedKeys: keys.length, models: models.map((model) => model.id) };
   }
 
+  /** New discoveries remain inactive until pricing and compatibility are reviewed. */
+  async syncCpaModels(channelId: bigint) {
+    const channel = await this.prisma.channel.findUnique({ where: { id: channelId }, include: { nodes: true } });
+    if (!channel) throw notFound("Channel not found");
+    const nodes = channel.nodes.filter(n => n.adapter === "cpa");
+    if (!nodes.length) throw badRequest("This channel has no CPA nodes");
+    const results = await Promise.all(nodes.map(n => probeCpa(n)));
+    if (results.some(r => !r.valid || !r.models.length)) throw badRequest("CPA model catalogue unavailable; no models changed");
+    const models = [...new Map(results.flatMap(r => r.models).map(m => [m.id, m])).values()];
+    return this.prisma.$transaction(async tx => {
+      let addedModels = 0;
+      let addedRoutes = 0;
+      for (const model of models) {
+        let alias = await tx.modelAlias.findUnique({ where: { alias: model.id } });
+        if (!alias) {
+          const image = /image/i.test(model.id);
+          alias = await tx.modelAlias.create({ data: {
+            alias: model.id, displayName: model.id, provider: model.owned_by?.slice(0, 32) || "OpenAI",
+            category: image ? "image" : "chat", status: "inactive", supportsStream: !image,
+            supportsTools: !image, description: "待审核：请确认模型能力、价格和调用兼容性后启用",
+            pricing: { reviewRequired: true, source: "cpa-discovery" },
+          } });
+          addedModels++;
+        }
+        const route = await tx.modelRoute.findFirst({ where: { channelId, aliasId: alias.id } });
+        if (!route) {
+          await tx.modelRoute.create({ data: { channelId, aliasId: alias.id, upstreamModel: model.id, priority: 10, status: "inactive" } });
+          addedRoutes++;
+        }
+      }
+      await tx.channel.update({ where: { id: channelId }, data: { models: models.map(m => m.id) } });
+      return { discovered: models.length, addedModels, addedRoutes, message: "新模型及路由已停用入库；请审核价格和兼容性后启用。已有价格和启用状态保持不变。" };
+    });
+  }
+
   async deleteNode(nodeId: bigint) {
     return this.prisma.channelNode.delete({ where: { id: nodeId } });
   }
@@ -179,6 +214,14 @@ export class ChannelService {
     if (!node) throw notFound("Node not found");
 
     try {
+      if (node.adapter === "cpa") {
+        const result = await probeCpa(node);
+        await this.prisma.channelNode.update({ where: { id: nodeId }, data: {
+          status: result.healthy ? "healthy" : "unhealthy", lastHealthCheck: new Date(),
+          probeLatency: result.latency, healthStatus: { modelCount: result.models.length, httpStatus: result.status },
+        } });
+        return { healthy: result.healthy, latency: result.latency, data: { modelCount: result.models.length, httpStatus: result.status } };
+      }
       const start = Date.now();
       const path = node.probePath || "/healthz";
       const res = await fetch(upstreamUrl(node.internalUrl, path), {

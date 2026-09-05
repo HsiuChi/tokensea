@@ -11,7 +11,7 @@ import type { PrismaClient } from "@prisma/client";
 import type Redis from "ioredis";
 import { redisKeys } from "../../lib/redis-keys.js";
 import { dispatchWebhookEvent } from "../notify/webhook-service.js";
-import { upstreamHeaders, upstreamUrl } from "./upstream-request.js";
+import { probeCpa, upstreamHeaders, upstreamUrl } from "./upstream-request.js";
 
 const PROBE_INTERVAL_MS = 30_000;
 const PROBE_CONCURRENCY = 10;
@@ -46,6 +46,16 @@ export function startHealthProbeWorker(
     if (!got) return;
 
     try {
+      if (node.adapter === "cpa") {
+        try {
+          const result = await probeCpa(node);
+          if (result.healthy) await updateSuccess(node, result.latency, { modelCount: result.models.length }, prisma, recoverThreshold);
+          else await updateFail(node, prisma, failThreshold);
+        } catch {
+          await updateFail(node, prisma, failThreshold);
+        }
+        return;
+      }
       const path = node.probePath || "/health";
       const timeoutMs = node.probeTimeoutMs ?? 5000;
       const start = Date.now();

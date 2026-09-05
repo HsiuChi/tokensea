@@ -62,7 +62,7 @@ export async function channelRoutes(app: FastifyInstance) {
       internalUrl: z.string().min(1),
       internalApiKey: z.string().min(1),
       maxConcurrent: z.number().int().optional(),
-      adapter: z.enum(["dario", "openai-compatible", "ksyun"]).optional(),
+      adapter: z.enum(["dario", "cpa", "openai-compatible", "ksyun"]).optional(),
       authType: z.enum(["x-api-key", "bearer", "both"]).optional(),
       probePath: z.string().max(64).optional(),
       probeTimeoutMs: z.number().int().min(1000).max(60000).optional(),
@@ -89,6 +89,11 @@ export async function channelRoutes(app: FastifyInstance) {
   });
 
   // Health check
+  app.post("/:id/sync-models", { preHandler: adminAuthHook }, async (request) => {
+    const { id } = z.object({ id: z.coerce.bigint() }).parse(request.params);
+    return { data: await channelService.syncCpaModels(id) };
+  });
+
   app.post("/nodes/:nodeId/health", { preHandler: adminAuthHook }, async (request) => {
     const { nodeId } = z.object({ nodeId: z.coerce.bigint() }).parse(request.params);
     return { data: await channelService.healthCheck(nodeId) };

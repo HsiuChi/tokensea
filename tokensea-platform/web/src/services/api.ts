@@ -86,6 +86,7 @@ export const api = {
   deleteNode: (nodeId: string) => request<any>(`/api/channel/nodes/${nodeId}`, { method: "DELETE" }),
   healthCheckNode: (nodeId: string) => request<any>(`/api/channel/nodes/${nodeId}/health`, { method: "POST" }),
   getOAuthStatus: (nodeId: string) => request<any>(`/api/channel/nodes/${nodeId}/oauth`),
+  syncChannelModels: (id: string) => request<any>(`/api/channel/${id}/sync-models`, { method: "POST" }),
   testChannel: (id: string, model?: string) => request<any>(`/api/channel/${id}/test`, { method: "POST", body: JSON.stringify(model ? { model } : {}) }),
   testNode: (channelId: string, nodeId: string, model?: string) => request<any>(`/api/channel/${channelId}/nodes/${nodeId}/test`, { method: "POST", body: JSON.stringify(model ? { model } : {}) }),
 

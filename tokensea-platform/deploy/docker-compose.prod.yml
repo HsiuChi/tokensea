@@ -27,6 +27,9 @@ services:
       retries: 20
 
   app:
+    networks:
+      - default
+      - tokensea_infra
     build:
       context: ..
       dockerfile: Dockerfile
@@ -72,3 +75,8 @@ volumes:
   tokensea_redis_data:
   tokensea_caddy_data:
   tokensea_caddy_config:
+
+networks:
+  tokensea_infra:
+    external: true
+    name: ${TOKENSEA_INFRA_NETWORK:-tokensea-infra_tokensea-infra}

@@ -34,11 +34,12 @@ interface ChannelForm {
 }
 
 interface NodeForm {
+  adapter: string
   name: string; internalUrl: string; apiKey: string; maxConcurrent: string
 }
 
 const emptyChannel: ChannelForm = { name: "", type: "openai", models: "", priority: "1", weight: "1", billingMultiplier: "1", retryPolicy: "" }
-const emptyNode: NodeForm = { name: "", internalUrl: "", apiKey: "", maxConcurrent: "100" }
+const emptyNode: NodeForm = { adapter: "cpa", name: "", internalUrl: "", apiKey: "", maxConcurrent: "100" }
 
 export function AdminChannels() {
   const { t } = useTranslation()
@@ -57,6 +58,16 @@ export function AdminChannels() {
   const [oauthNode, setOauthNode] = useState<any>(null)
   const [oauthData, setOauthData] = useState<any>(null)
   const [oauthLoading, setOauthLoading] = useState(false)
+  const [syncing, setSyncing] = useState<string | null>(null)
+
+  const handleSyncModels = async (id: string) => {
+    setSyncing(id)
+    try {
+      const result = await api.syncChannelModels(id)
+      alert(`发现 ${result.discovered} 个模型，新增 ${result.addedModels} 个模型、${result.addedRoutes} 条路由。${result.message}`)
+      fetch()
+    } catch (e: any) { alert(e.message) } finally { setSyncing(null) }
+  }
   const [saving, setSaving] = useState(false)
   const [showKsyun, setShowKsyun] = useState(false)
   const [ksyunCatalog, setKsyunCatalog] = useState<any[]>([])
@@ -142,6 +153,9 @@ export function AdminChannels() {
       await api.addNode(channelId, {
         name: nodeForm.name, internalUrl: nodeForm.internalUrl,
         internalApiKey: nodeForm.apiKey, maxConcurrent: Number(nodeForm.maxConcurrent),
+        adapter: nodeForm.adapter,
+        authType: nodeForm.adapter === "dario" ? "x-api-key" : "bearer",
+        probePath: nodeForm.adapter === "dario" ? "/healthz" : "/v1/models",
       })
       setAddNodeTo(null); setNodeForm({ ...emptyNode }); fetch()
     } catch (e: any) { alert(e.message) } finally { setSaving(false) }
@@ -323,6 +337,7 @@ export function AdminChannels() {
         <DialogContent>
           <DialogHeader><DialogTitle>{t("admin.channels.addNodeTitle")}</DialogTitle></DialogHeader>
           <div className="space-y-4">
+            <div className="space-y-2"><Label>适配器</Label><Select value={nodeForm.adapter} onValueChange={(adapter) => setNodeForm({ ...nodeForm, adapter })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="cpa">CPA</SelectItem><SelectItem value="openai-compatible">OpenAI Compatible</SelectItem><SelectItem value="ksyun">金山云</SelectItem><SelectItem value="dario">Dario（旧版）</SelectItem></SelectContent></Select></div>
             <div className="space-y-2"><Label>{t("admin.channels.nodeName")}</Label><Input value={nodeForm.name} onChange={(e) => setNodeForm({ ...nodeForm, name: e.target.value })} /></div>
             <div className="space-y-2"><Label>{t("admin.channels.internalUrl")}</Label><Input value={nodeForm.internalUrl} onChange={(e) => setNodeForm({ ...nodeForm, internalUrl: e.target.value })} placeholder="https://api.openai.com" /></div>
             <div className="space-y-2"><Label>{t("admin.channels.apiKey")}</Label><Input type="password" value={nodeForm.apiKey} onChange={(e) => setNodeForm({ ...nodeForm, apiKey: e.target.value })} /></div>
@@ -429,6 +444,7 @@ export function AdminChannels() {
                 </CardHeader>
                 {isExpanded && (
                   <CardContent>
+                    {ch.nodes?.some((n: any) => n.adapter === "cpa") && <div className="mb-3 flex items-center gap-3"><Button size="sm" variant="outline" disabled={syncing !== null} onClick={() => handleSyncModels(ch.id)}>{syncing === ch.id ? "同步中…" : "同步 CPA 模型"}</Button><span className="text-xs text-muted-foreground">新模型停用入库，审核价格及兼容性后启用</span></div>}
                     <div className="mb-3 text-xs text-muted-foreground">
                       {t("admin.channels.priority")}: {ch.priority} · {t("admin.channels.weight")}: {ch.weight} · {t("admin.channels.billingMultiplier")}: ×{ch.billingMultiplier ?? 1}
                       {(ch.models?.length ?? 0) > 0 && <> · {t("admin.channels.models")}: {ch.models!.join(", ")}</>}
