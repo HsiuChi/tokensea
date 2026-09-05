@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react"
 import { useTranslation } from "react-i18next"
+import { ChannelOperations } from "@/components/ChannelOperations"
 import { api } from "@/services/api"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -217,6 +218,7 @@ export function AdminChannels() {
 
   return (
     <div className="space-y-6">
+      <ChannelOperations />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{t("admin.channels.title")}</h1>

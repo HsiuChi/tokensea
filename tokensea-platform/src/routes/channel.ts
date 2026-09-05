@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { OperationsService } from "../services/channel/operations-service.js";
 import { ChannelService } from "../services/channel/channel-service.js";
 import { adminAuthHook } from "../middleware/user-auth.js";
 import { KSYUN_MODELS } from "../config/ksyun-model-catalog.js";
@@ -11,6 +12,8 @@ export async function channelRoutes(app: FastifyInstance) {
     const query = z.object({ page: z.coerce.number().min(1).default(1), pageSize: z.coerce.number().min(1).max(100).default(20) }).parse(request.query);
     return { data: await channelService.list(query) };
   });
+
+  app.get("/operations", { preHandler: adminAuthHook }, async () => ({ data: await new OperationsService(app.prisma, app.redis).overview() }));
 
   app.get("/ksyun/catalog", { preHandler: adminAuthHook }, async () => {
     return { data: KSYUN_MODELS };

@@ -10,6 +10,7 @@
 import type { PrismaClient } from "@prisma/client";
 import type Redis from "ioredis";
 import { redisKeys } from "../../lib/redis-keys.js";
+import { OperationsService } from "./operations-service.js";
 import { dispatchWebhookEvent } from "../notify/webhook-service.js";
 import { probeCpa, upstreamHeaders, upstreamUrl } from "./upstream-request.js";
 
@@ -132,6 +133,7 @@ export function startHealthProbeWorker(
         }
       }
       await Promise.allSettled(running);
+      for (const node of nodes.filter(n => n.adapter === "cpa")) await new OperationsService(prisma, redis).cpaAccounts(node);
     } catch (err) {
       console.error("[health-probe] tick error:", err);
     }

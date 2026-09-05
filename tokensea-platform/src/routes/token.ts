@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { validIpRule } from "../lib/ip-policy.js";
 import { TokenService } from "../services/token/token-service.js";
 import { userAuthHook } from "../middleware/user-auth.js";
 
@@ -19,14 +20,13 @@ export async function tokenRoutes(app: FastifyInstance) {
   app.post("/", { preHandler: userAuthHook }, async (request, reply) => {
     const body = z.object({
       name: z.string().min(1).max(64),
-      quota: z.coerce.bigint().optional(),
-      maxCalls: z.coerce.bigint().optional(),
-      models: z.array(z.string()).optional(),
-      planId: z.coerce.bigint().optional(),
+      quota: z.coerce.bigint().min(-1n).optional(),
+      maxCalls: z.coerce.bigint().min(-1n).optional(),
+      models: z.array(z.string().min(1).max(64)).max(500).optional(),
       expiresAt: z.string().datetime().optional(),
-      dailyLimit: z.coerce.bigint().optional(),
-      tokenLimit: z.coerce.bigint().optional(),
-      allowedIps: z.array(z.string()).optional(),
+      dailyLimit: z.coerce.bigint().min(-1n).optional(),
+      tokenLimit: z.coerce.bigint().min(-1n).optional(),
+      allowedIps: z.array(z.string().refine(validIpRule, "Invalid IP or CIDR")).max(100).optional(),
     }).parse(request.body);
 
     const { apiKey, rawKey } = await tokenService.create(request.userId!, {
@@ -47,14 +47,13 @@ export async function tokenRoutes(app: FastifyInstance) {
     const body = z.object({
       name: z.string().min(1).max(64).optional(),
       status: z.enum(["active", "disabled"]).optional(),
-      quota: z.coerce.bigint().optional(),
-      maxCalls: z.coerce.bigint().optional(),
-      models: z.array(z.string()).optional(),
-      planId: z.coerce.bigint().optional(),
+      quota: z.coerce.bigint().min(-1n).optional(),
+      maxCalls: z.coerce.bigint().min(-1n).optional(),
+      models: z.array(z.string().min(1).max(64)).max(500).optional(),
       expiresAt: z.string().datetime().nullable().optional(),
-      dailyLimit: z.coerce.bigint().optional(),
-      tokenLimit: z.coerce.bigint().optional(),
-      allowedIps: z.array(z.string()).nullable().optional(),
+      dailyLimit: z.coerce.bigint().min(-1n).optional(),
+      tokenLimit: z.coerce.bigint().min(-1n).optional(),
+      allowedIps: z.array(z.string().refine(validIpRule, "Invalid IP or CIDR")).max(100).nullable().optional(),
     }).parse(request.body);
 
     const apiKey = await tokenService.update(request.userId!, params.id, {

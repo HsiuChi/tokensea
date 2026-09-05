@@ -13,7 +13,7 @@ export async function logRoutes(app: FastifyInstance) {
       pageSize: z.coerce.number().min(1).max(100).default(20),
       startDate: z.string().optional(),
       endDate: z.string().optional(),
-      status: z.string().optional(),
+      status: z.enum(["succeeded", "failed", "rate_limited", "timeout"]).optional(),
       requestedModel: z.string().optional(),
     }).parse(request.query);
 
@@ -24,10 +24,21 @@ export async function logRoutes(app: FastifyInstance) {
   app.get("/self/stats", { preHandler: userAuthHook }, async (request) => {
     const query = z.object({
       period: z.string().default(new Date().toISOString().slice(0, 7).replace("-", "")),
+      status: z.enum(["succeeded", "failed", "rate_limited", "timeout"]).optional(),
+      requestedModel: z.string().max(64).optional(),
       startDate: z.string().optional(),
       endDate: z.string().optional(),
     }).parse(request.query);
-    return { data: await logService.getUsageStats(request.userId!, query.period, query.startDate, query.endDate) };
+    return { data: await logService.getUsageStats(request.userId!, query.period, query.startDate, query.endDate, query) };
+  });
+
+  app.get("/self/export", { preHandler: userAuthHook }, async (request) => {
+    const query = z.object({ startDate: z.string().optional(), endDate: z.string().optional(), status: z.enum(["succeeded", "failed", "rate_limited", "timeout"]).optional(), requestedModel: z.string().max(64).optional() }).parse(request.query);
+    return { data: await logService.exportRequests(request.userId!, query) };
+  });
+  app.get("/self/:requestId", { preHandler: userAuthHook }, async (request) => {
+    const { requestId } = z.object({ requestId: z.string().uuid() }).parse(request.params);
+    return { data: await logService.requestDetail(request.userId!, requestId) };
   });
 
   // Admin: all request logs
@@ -39,7 +50,7 @@ export async function logRoutes(app: FastifyInstance) {
       apiKeyId: z.coerce.bigint().optional(),
       startDate: z.string().optional(),
       endDate: z.string().optional(),
-      status: z.string().optional(),
+      status: z.enum(["succeeded", "failed", "rate_limited", "timeout"]).optional(),
       requestedModel: z.string().optional(),
     }).parse(request.query);
 

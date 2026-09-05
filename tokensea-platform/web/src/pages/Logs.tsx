@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react"
 import { useTranslation } from "react-i18next"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { api } from "@/services/api"
 import { formatQuota, formatLatency } from "@/lib/utils"
 import { ModelName } from "@/components/ModelIcon"
@@ -45,6 +46,7 @@ interface LogList {
 
 interface UsageStats {
   period: string
+  quality?: { avgLatencyMs: number | null }
   totals: {
     billedRequests: number
     inputTokens: number
@@ -71,6 +73,26 @@ export function LogsPage() {
   const [startDate, setStartDate] = useState("")
   const [endDate, setEndDate] = useState("")
 
+  const [detail, setDetail] = useState<any>(null)
+  const [exporting, setExporting] = useState(false)
+  const viewDetail = async (id: string) => {
+    try { setDetail(await api.getSelfLogDetail(id)) } catch (e: any) { alert(e.message) }
+  }
+  const exportLogs = async () => {
+    setExporting(true)
+    try {
+      const params: Record<string,string> = {}
+      if(startDate) params.startDate = new Date(startDate + "T00:00:00").toISOString()
+      if(endDate) params.endDate = new Date(new Date(endDate + "T00:00:00").getTime() + 86400000).toISOString()
+      if(status) params.status = status
+      if(model) params.requestedModel = model
+      const data = await api.exportSelfLogs(params)
+      const url = URL.createObjectURL(new Blob([data.csv], {type:"text/csv;charset=utf-8"}))
+      const a = document.createElement("a"); a.href = url; a.download = "tokensea-requests.csv"; a.click()
+      setTimeout(()=>URL.revokeObjectURL(url),1000)
+      if(data.truncated) alert(data.message)
+    } catch(e: any) { alert(e.message) } finally { setExporting(false) }
+  }
   const period = new Date().toISOString().slice(0, 7).replace("-", "")
 
   const fetchLogs = useCallback(() => {
@@ -79,8 +101,8 @@ export function LogsPage() {
       page,
       status: status || undefined,
       requestedModel: model || undefined,
-      startDate: startDate || undefined,
-      endDate: endDate || undefined,
+      startDate: startDate ? new Date(startDate + "T00:00:00").toISOString() : undefined,
+      endDate: endDate ? new Date(new Date(endDate + "T00:00:00").getTime() + 86400000).toISOString() : undefined,
     })
       .then((data: any) => {
         const items = data.items || data.data?.items || []
@@ -93,13 +115,13 @@ export function LogsPage() {
 
   const fetchStats = useCallback(() => {
     setStatsLoading(true)
-    api.getSelfStats({ period })
+    api.getSelfStats({ period, startDate: startDate ? new Date(startDate + "T00:00:00").toISOString() : undefined, endDate: endDate ? new Date(new Date(endDate + "T00:00:00").getTime() + 86400000).toISOString() : undefined, status: status || undefined, requestedModel: model || undefined })
       .then((data: any) => {
         setStats(data.data ?? data)
       })
       .catch(console.error)
       .finally(() => setStatsLoading(false))
-  }, [period])
+  }, [period, startDate, endDate, status, model])
 
   useEffect(() => {
     fetchLogs()
@@ -179,17 +201,9 @@ export function LogsPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {loading ? <Skeleton className="h-8 w-20" /> : (
-                logs.items.length > 0
-                  ? formatLatency(
-                      Math.round(
-                        logs.items.reduce((sum, l) => sum + (l.durationMs || 0), 0) / logs.items.length
-                      )
-                    )
-                  : "---"
-              )}
+              {statsLoading ? <Skeleton className="h-8 w-20" /> : stats?.quality?.avgLatencyMs != null ? formatLatency(stats.quality.avgLatencyMs) : "—"}
             </div>
-            <p className="text-xs text-muted-foreground">{t("logs.last20", { defaultValue: "Last 20 requests" })}</p>
+            <p className="text-xs text-muted-foreground">所选时段成功请求的完整耗时（非首字延迟）</p>
           </CardContent>
         </Card>
       </div>
@@ -232,7 +246,8 @@ export function LogsPage() {
           />
         </div>
 
-        <Button variant="outline" size="sm" onClick={fetchLogs}>{t("common.refresh", { defaultValue: "Refresh" })}</Button>
+        <Button variant="outline" size="sm" disabled={exporting} onClick={exportLogs}>{exporting ? "导出中…" : "导出 CSV（默认近 30 天）"}</Button>
+        <Button variant="outline" size="sm" onClick={()=>{fetchLogs();fetchStats()}}>{t("common.refresh", { defaultValue: "Refresh" })}</Button>
         <Button variant="ghost" size="sm" onClick={handleClearFilters}>{t("common.clear", { defaultValue: "Clear" })}</Button>
       </div>
 
@@ -277,7 +292,7 @@ export function LogsPage() {
                       <TableCell>
                         <ModelName model={log.requestedModel} upstreamModel={log.actualUpstreamModel} />
                       </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{log.endpoint}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{log.endpoint}<Button size="sm" variant="ghost" onClick={()=>viewDetail(log.requestId)}>详情</Button></TableCell>
                       <TableCell className="text-xs text-right text-muted-foreground">
                         {(log.inputTokens || 0) + (log.outputTokens || 0)}
                       </TableCell>
@@ -309,6 +324,26 @@ export function LogsPage() {
           </ScrollArea>
         </CardContent>
       </Card>
+
+      <Dialog open={!!detail} onOpenChange={open=>!open && setDetail(null)}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>请求详情与计费明细</DialogTitle></DialogHeader>
+          {detail && <div className="space-y-4 text-sm">
+            <code className="block break-all text-xs">{detail.requestId}</code>
+            <p>{detail.requestedModel} · {detail.endpoint} · HTTP {detail.httpStatus ?? "—"}</p>
+            {detail.errorExplanation && <div className="rounded-xl bg-destructive/10 p-3 text-destructive">{detail.errorExplanation}<p className="mt-1 font-mono">{detail.errorCode ?? "未记录错误代码"}</p></div>}
+            <div className="grid grid-cols-2 gap-3 rounded-xl bg-muted p-4"><span>输入：{detail.inputTokens}</span><span>输出：{detail.outputTokens}</span><span>缓存读取：{detail.cacheReadTokens}</span><span>缓存写入：{detail.cacheCreationTokens}</span><span>耗时：{detail.durationMs ?? "—"} ms</span><span>扣费：$ {(Number(detail.billableUnits)/1e6).toFixed(6)}</span></div>
+            <p className="text-muted-foreground">{detail.billingExplanation}</p>
+            {detail.pricingDetail && <div className="space-y-2">
+              <p>输入 / 输出单价：$ {detail.pricingDetail.inputPrice} / $ {detail.pricingDetail.outputPrice}（每百万 Tokens）</p>
+              <p>缓存读取 / 写入单价：$ {detail.pricingDetail.cacheReadPrice} / $ {detail.pricingDetail.cacheWrite5mPrice}</p>
+              <p>套餐倍率：{detail.pricingDetail.planMultiplier ?? "未记录"} · 渠道倍率：{detail.pricingDetail.channelMultiplier ?? "未记录"} · 总倍率：{detail.pricingDetail.billingMultiplier}</p>
+              {detail.pricingDetail.longContext && <p>此请求适用长上下文价格。</p>}
+              <details><summary className="cursor-pointer text-primary">完整计费快照（含图片用量）</summary><pre className="mt-2 overflow-auto rounded-xl bg-muted p-3 text-xs">{JSON.stringify(detail.pricingDetail,null,2)}</pre></details>
+            </div>}
+          </div>}
+        </DialogContent>
+      </Dialog>
 
       {/* Pagination */}
       <div className="flex items-center justify-center gap-2">

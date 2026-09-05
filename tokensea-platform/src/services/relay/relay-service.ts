@@ -1,6 +1,10 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
 import type { PrismaClient, ApiKey, Plan, ChannelNode } from "@prisma/client";
 import type Redis from "ioredis";
+import { safeErrorCode } from "../log/request-detail.js";
+import { dispatchWebhookEvent } from "../notify/webhook-service.js";
+import { calculateTokenPrice, openAiUsage, type TokenUsage } from "../billing/token-pricing.js";
+import { ipAllowed } from "../../lib/ip-policy.js";
 import { hashApiKey } from "../../lib/crypto.js";
 import { verifyToken } from "../../lib/jwt.js";
 import { redisKeys } from "../../lib/redis-keys.js";
@@ -24,14 +28,10 @@ interface RelayContext {
   protocol: "anthropic" | "openai";
   endpoint?: string;
   isProbe?: boolean;
+  stream?: boolean;
 }
 
-interface UsageInfo {
-  inputTokens: number;
-  outputTokens: number;
-  cacheCreationTokens: number;
-  cacheReadTokens: number;
-}
+type UsageInfo = TokenUsage;
 
 const NODE_HEALTH_TTL_S = 30; // Redis TTL for node health cache
 const MAX_UPSTREAM_ATTEMPTS = 20;
@@ -54,13 +54,7 @@ export class RelayService {
     const startedAt = new Date();
     const requestId = uuid();
 
-    // Probe requests (x-tokensea-probe: 1) bypass billing/quota/rate-limit/sensitive
-    // and skip settlement, but still go through channel selection + forwarding
-    // so the test exercises the real relay path. Auth is still required unless
-    // the caller is the internal channel-test service (which uses the node key
-    // directly and does NOT hit this relay path — so any probe reaching here
-    // is a user-style probe and must still auth, just not bill).
-    const isProbe = request.headers["x-tokensea-probe"] === "1";
+    const isProbe = false; // Public headers must never bypass billing or policy checks.
 
     // ① Auth — accept API key (tsk-*) or JWT (Playground)
     const apiKey = await this.resolveApiKey(request);
@@ -81,7 +75,7 @@ export class RelayService {
     const effectiveModels = (keyModels && keyModels.length > 0)
       ? keyModels
       : (groupModels && groupModels.length > 0 ? groupModels : null);
-    if (effectiveModels && !effectiveModels.includes(requestedModel)) {
+    if ((groupModels?.length && !groupModels.includes(requestedModel)) || (effectiveModels && !effectiveModels.includes(requestedModel))) {
       throw forbidden(`Model ${requestedModel} not allowed on this key`);
     }
 
@@ -122,6 +116,7 @@ export class RelayService {
     const triedChannelIds = new Set<string>();
     const triedNodeIds = new Set<string>();
     let lastError: any;
+    let lastContext: RelayContext | undefined;
 
     const maxAttempts = Math.min(Math.max(allNodes.length, 1), MAX_UPSTREAM_ATTEMPTS);
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -146,6 +141,8 @@ export class RelayService {
         channelId: channel.id,
         channelBillingMultiplier: channel.billingMultiplier ?? 1.0,
         isProbe,
+        endpoint: request.url.split("?")[0],
+        stream: body.stream === true,
         nodeId: node.id,
         nodeUrl: node.internalUrl,
         nodeApiKey: node.internalApiKey,
@@ -153,6 +150,7 @@ export class RelayService {
         protocol: isAnthropicEndpoint ? "anthropic" : "openai",
       };
 
+      lastContext = ctx;
       try {
         // Transparent proxy: forward to dario on the SAME path the client used.
         // dario handles both /v1/messages (Anthropic) and /v1/chat/completions (OpenAI),
@@ -166,7 +164,7 @@ export class RelayService {
           const lower = key.toLowerCase();
           if (lower === "host" || lower === "connection" || lower === "transfer-encoding" ||
               lower === "content-length" || lower === "accept-encoding" ||
-              lower === "authorization" || lower === "x-api-key") continue;
+              lower === "authorization" || lower === "x-api-key" || lower === "x-tokensea-probe") continue;
           headers[key] = value;
         }
         Object.assign(headers, upstreamHeaders(node, request.url));
@@ -178,6 +176,7 @@ export class RelayService {
         // Non-CC clients → template replay (CC fingerprint injection)
         // Model mapping, protocol conversion — all done by dario
         const upstreamBody = { ...body, model: ctx.upstreamModel };
+        if (body.stream === true && request.url.startsWith("/v1/chat/completions") && ctx.protocol === "openai") upstreamBody.stream_options = { ...body.stream_options, include_usage: true };
         const isStream = body.stream === true;
 
         if (isStream) {
@@ -217,8 +216,9 @@ export class RelayService {
       }
     }
 
-    // All attempts exhausted
-    throw internalError(lastError?.message ?? "All upstream nodes exhausted");
+    // All attempts exhausted: retain the final failure in the request statistics.
+    if(lastContext) await this.settle(lastContext, openAiUsage(), "failed", lastError?.statusCode ?? 502, lastError?.code ?? "upstream_exhausted");
+    throw internalError("All upstream nodes exhausted");
   }
 
   /**
@@ -241,7 +241,7 @@ export class RelayService {
     const keyModels = apiKey.models as string[] | null;
     const groupModels = apiKey.keyGroup?.models as string[] | null;
     const effectiveModels = keyModels?.length ? keyModels : (groupModels?.length ? groupModels : null);
-    if (effectiveModels && !effectiveModels.includes(requestedModel)) {
+    if ((groupModels?.length && !groupModels.includes(requestedModel)) || (effectiveModels && !effectiveModels.includes(requestedModel))) {
       throw forbidden(`Model ${requestedModel} not allowed on this key`);
     }
 
@@ -354,10 +354,13 @@ export class RelayService {
         const errorBody = await response.text();
         const err: any = new Error(errorBody);
         err.statusCode = response.status;
+        err.code = safeErrorCode(errorBody, response.status);
+        await this.reportUpstreamFailure(ctx, response.status, err.code);
         throw err;
       }
       const errorBody = await response.text();
-      await this.settle(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", response.status);
+      await this.settle(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", response.status, safeErrorCode(errorBody, response.status));
+      await this.reportUpstreamFailure(ctx, response.status, safeErrorCode(errorBody, response.status));
       reply.code(response.status).send(errorBody);
       return;
     }
@@ -388,10 +391,13 @@ export class RelayService {
         const errorBody = await response.text();
         const err: any = new Error(errorBody);
         err.statusCode = response.status;
+        err.code = safeErrorCode(errorBody, response.status);
+        await this.reportUpstreamFailure(ctx, response.status, err.code);
         throw err;
       }
       const errorBody = await response.text();
-      await this.settle(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", response.status);
+      await this.settle(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", response.status, safeErrorCode(errorBody, response.status));
+      await this.reportUpstreamFailure(ctx, response.status, safeErrorCode(errorBody, response.status));
       reply.code(response.status).send(errorBody);
       return;
     }
@@ -406,6 +412,8 @@ export class RelayService {
     let outputTokens = 0;
     let cacheCreationTokens = 0;
     let cacheReadTokens = 0;
+    let pending = "";
+    let failed = false;
 
     if (response.body) {
       const reader = response.body.getReader();
@@ -420,19 +428,36 @@ export class RelayService {
           reply.raw.write(chunk);
 
           // Try to extract usage from SSE events
-          const tokenInfo = this.extractTokensFromSSE(chunk, ctx.protocol);
-          inputTokens += tokenInfo.inputTokens;
-          outputTokens += tokenInfo.outputTokens;
-          cacheCreationTokens += tokenInfo.cacheCreationTokens;
-          cacheReadTokens += tokenInfo.cacheReadTokens;
+          pending += chunk;
+          const end = pending.lastIndexOf("\n");
+          if (end < 0) continue;
+          const complete = pending.slice(0, end + 1);
+          pending = pending.slice(end + 1);
+          const tokenInfo = this.extractTokensFromSSE(complete, ctx.protocol);
+          inputTokens = Math.max(inputTokens, tokenInfo.inputTokens);
+          outputTokens = Math.max(outputTokens, tokenInfo.outputTokens);
+          cacheCreationTokens = Math.max(cacheCreationTokens, tokenInfo.cacheCreationTokens);
+          cacheReadTokens = Math.max(cacheReadTokens, tokenInfo.cacheReadTokens);
+          if (/"type"\s*:\s*"(response.failed|error)"/.test(complete)) failed = true;
         }
       } catch (err) {
+        failed = true;
         request.log.error({ err, requestId: ctx.requestId }, "Stream error");
       }
     }
 
     reply.raw.end();
-    await this.settle(ctx, { inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens }, "succeeded", 200);
+    await this.settle(ctx, { inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens }, failed ? "failed" : "succeeded", failed ? 502 : 200, failed ? "stream_interrupted" : undefined);
+  }
+
+  private async reportUpstreamFailure(ctx: RelayContext, status: number, code?: string) {
+    const event = /quota|balance|credit|resource_exhausted/.test(code ?? "") ? "node.quota_exhausted"
+      : status === 429 ? "node.rate_limited" : status === 401 || status === 403 ? "node.auth_failed" : null;
+    if (!event) return;
+    try {
+      const key = "alert:" + event + ":" + ctx.nodeId;
+      if (await this.redis.set(key, "1", "EX", 300, "NX")) dispatchWebhookEvent(this.prisma, event, { nodeId: ctx.nodeId.toString(), channelId: ctx.channelId.toString(), httpStatus: status, errorCode: code ?? null, model: ctx.model });
+    } catch { /* Notification failures must not affect relay responses. */ }
   }
 
   // ---- Auth ----
@@ -466,6 +491,7 @@ export class RelayService {
       } catch {}
     }
     if (!apiKey || apiKey.status !== "active") throw unauthorized("Invalid API key");
+    if (!ipAllowed(request.ip, Array.isArray(apiKey.allowedIps) ? apiKey.allowedIps : [])) throw forbidden("IP address not allowed on this key");
     return apiKey;
   }
 
@@ -480,7 +506,7 @@ export class RelayService {
     }
 
     // Key quota
-    if (apiKey.quota > 0 && apiKey.usedQuota >= apiKey.quota) {
+    if (apiKey.quota >= 0n && apiKey.usedQuota >= apiKey.quota) {
       throw rateLimited("API key quota exhausted");
     }
 
@@ -493,7 +519,7 @@ export class RelayService {
     }
 
     // Key call limit
-    if (apiKey.maxCalls > 0 && apiKey.usedCalls >= apiKey.maxCalls) {
+    if (apiKey.maxCalls >= 0n && apiKey.usedCalls >= apiKey.maxCalls) {
       throw rateLimited("API key call limit reached");
     }
 
@@ -724,31 +750,10 @@ export class RelayService {
       let billableUnits = 0n;
       let pricingDetail: any = undefined;
 
-      if (alias && (usage.inputTokens > 0 || usage.outputTokens > 0)) {
-        const planMultiplier = ctx.apiKey.plan?.billingMultiplier ?? 1;
-        const channelMultiplier = ctx.channelBillingMultiplier ?? 1;
-        const multiplier = planMultiplier * channelMultiplier;
-        const ppt = (p: number) => p / 1_000_000;
-
-        const inputCostUsd = usage.inputTokens * ppt(alias.inputPrice);
-        const cacheWriteCostUsd = usage.cacheCreationTokens * ppt(alias.cacheWrite5mPrice);
-        const cacheReadCostUsd = usage.cacheReadTokens * ppt(alias.cacheReadPrice);
-        const outputCostUsd = usage.outputTokens * ppt(alias.outputPrice);
-
-        const totalUsd = inputCostUsd + cacheWriteCostUsd + cacheReadCostUsd + outputCostUsd;
-        // 1 billableUnit = 1 micro-dollar ($0.000001). 1M units = $1
-        billableUnits = BigInt(Math.round(totalUsd * 1_000_000 * multiplier));
-        const costUsd = totalUsd * multiplier;
-
-        pricingDetail = {
-          inputTokens: usage.inputTokens, inputPrice: alias.inputPrice, inputCostUsd: +inputCostUsd.toFixed(6),
-          cacheCreationTokens: usage.cacheCreationTokens, cacheWrite5mPrice: alias.cacheWrite5mPrice, cacheWriteCostUsd: +cacheWriteCostUsd.toFixed(6),
-          cacheReadTokens: usage.cacheReadTokens, cacheReadPrice: alias.cacheReadPrice, cacheReadCostUsd: +cacheReadCostUsd.toFixed(6),
-          outputTokens: usage.outputTokens, outputPrice: alias.outputPrice, outputCostUsd: +outputCostUsd.toFixed(6),
-          totalUsd: +totalUsd.toFixed(6),
-          planMultiplier, channelMultiplier, billingMultiplier: multiplier,
-          costUsd: +costUsd.toFixed(6),
-        };
+      if (alias && (usage.inputTokens > 0 || usage.outputTokens > 0 || usage.cacheReadTokens > 0 || usage.cacheCreationTokens > 0 || (usage.imageInputTokens ?? 0) > 0)) {
+        const priced = calculateTokenPrice(alias, usage, ctx.apiKey.plan?.billingMultiplier ?? 1, ctx.channelBillingMultiplier ?? 1);
+        billableUnits = priced.billableUnits;
+        pricingDetail = priced.detail;
       }
 
       const period = finishedAt.toISOString().slice(0, 7).replace("-", "");
@@ -765,7 +770,7 @@ export class RelayService {
             actualUpstreamModel: ctx.upstreamModel,
             channelId: ctx.channelId,
             nodeId: ctx.nodeId,
-            stream: false,
+            stream: ctx.stream ?? false,
             status: status as any,
             httpStatus,
             errorCode: errorCode ?? null,
@@ -875,7 +880,7 @@ export class RelayService {
     const effectiveModels = (keyModels && keyModels.length > 0)
       ? keyModels
       : (groupModels && groupModels.length > 0 ? groupModels : null);
-    if (effectiveModels && !effectiveModels.includes(requestedModel)) {
+    if ((groupModels?.length && !groupModels.includes(requestedModel)) || (effectiveModels && !effectiveModels.includes(requestedModel))) {
       throw forbidden(`Model ${requestedModel} not allowed on this key`);
     }
 
@@ -901,9 +906,9 @@ export class RelayService {
       requestId,
       apiKey: apiKey as any,
       model: requestedModel,
-      upstreamModel: routes[0]?.upstreamModel ?? requestedModel,
+      upstreamModel: routes.find(r => r.channelId === node.channelId)?.upstreamModel ?? requestedModel,
       channelId: node.channelId,
-      channelBillingMultiplier: 1.0,
+      channelBillingMultiplier: channels.find(c => c.id === node.channelId)?.billingMultiplier ?? 1,
       nodeId: node.id,
       nodeUrl: node.internalUrl,
       nodeApiKey: node.internalApiKey,
@@ -912,98 +917,28 @@ export class RelayService {
     };
 
     try {
-      // Bridge through Responses API with image_generation tool
-      // (codex-dario only supports /v1/chat/completions and /v1/responses, not /v1/images/generations)
-      // ChatGPT accounts require stream=true, store=false, and instructions field
-      const upstreamUrl = joinUpstreamUrl(node.internalUrl, "/v1/responses");
-      const headers: Record<string, string> = {
-        "content-type": "application/json",
-        ...upstreamHeaders(node, "/v1/responses"),
-        "x-request-id": requestId,
-        "x-tokensea-user": apiKey.userId.toString(),
-      };
-
-      const responsesBody = {
-        model: "gpt-5.4",
-        input: [{ type: "message", role: "user", content: prompt || body.prompt }],
-        tools: [{ type: "image_generation" }],
-        tool_choice: { type: "image_generation" },
-        instructions: "Generate the requested image.",
-        stream: true,
-        store: false,
-      };
-
-      const response = await fetch(upstreamUrl, {
+      if (body.stream === true) throw badRequest("Streaming images are not supported on this endpoint");
+      const path = "/v1/images/generations";
+      const response = await fetch(joinUpstreamUrl(node.internalUrl, path), {
         method: "POST",
-        headers,
-        body: JSON.stringify(responsesBody),
+        headers: { "content-type": "application/json", ...upstreamHeaders(node, path), "x-request-id": requestId },
+        body: JSON.stringify({ ...body, model: ctx.upstreamModel }),
+        signal: AbortSignal.timeout(180000),
       });
-
       if (!response.ok) {
         const errorBody = await response.text();
-        await this.settleImage(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", response.status, "/v1/responses");
+        await this.settleImage(ctx, openAiUsage(), "failed", response.status, path);
         reply.code(response.status).send(errorBody);
         return;
       }
-
-      // Stream-parse SSE: extract image_generation_call result and usage
-      let imageB64 = "";
-      let imageUsage: UsageInfo = { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 };
-      const reader = response.body!;
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      for await (const chunk of reader as AsyncIterable<Uint8Array>) {
-        buffer += decoder.decode(chunk, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop()!; // keep incomplete line
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const evt = JSON.parse(line.slice(6));
-            if (evt.type === "response.output_item.done" && evt.item?.type === "image_generation_call" && evt.item.result) {
-              imageB64 = evt.item.result;
-            }
-            // Extract usage from completed event
-            if (evt.type === "response.completed" || evt.type === "response.done") {
-              const u = evt.response?.usage ?? evt.usage;
-              if (u) {
-                imageUsage = {
-                  inputTokens: u.input_tokens ?? 0,
-                  outputTokens: u.output_tokens ?? 0,
-                  cacheCreationTokens: u.input_tokens_details?.cached_tokens ? 0 : 0,
-                  cacheReadTokens: u.input_tokens_details?.cached_tokens ?? 0,
-                };
-              }
-            }
-          } catch {}
-        }
-
-        // Stop once we have both the image and usage, or the image is ready and we've seen enough
-        if (imageB64 && (imageUsage.inputTokens > 0 || imageUsage.outputTokens > 0)) break;
-      }
-
-      if (!imageB64) {
-        await this.settleImage(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", 502, "/v1/responses");
-        throw internalError("Image generation returned no images");
-      }
-
-      // Convert to OpenAI Images API response format
-      const imageResponse = {
-        created: Math.floor(Date.now() / 1000),
-        data: [{
-          url: `data:image/png;base64,${imageB64}`,
-          revised_prompt: prompt,
-        }],
-      };
-
-      await this.settleImage(ctx, imageUsage, "succeeded", 200, "/v1/responses");
-      reply.code(200).header("content-type", "application/json").send(imageResponse);
+      const result = await response.json() as any;
+      if (!Array.isArray(result.data) || result.data.length === 0) throw internalError("Image generation returned no images");
+      await this.settleImage(ctx, openAiUsage(result.usage), "succeeded", 200, path);
+      reply.code(200).send(result);
     } catch (err: any) {
-      if (err.statusCode) throw err;
       request.log.error({ err, requestId }, "Image generation upstream failed");
-      await this.settleImage(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", err.statusCode ?? 502, "/v1/responses");
+      await this.settleImage(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", err.statusCode ?? 502, "/v1/images/generations");
+      if (err.statusCode) throw err;
       throw internalError("Image generation failed");
     }
   }
@@ -1050,7 +985,7 @@ export class RelayService {
     const effectiveModels = (keyModels && keyModels.length > 0)
       ? keyModels
       : (groupModels && groupModels.length > 0 ? groupModels : null);
-    if (effectiveModels && !effectiveModels.includes(requestedModel)) {
+    if ((groupModels?.length && !groupModels.includes(requestedModel)) || (effectiveModels && !effectiveModels.includes(requestedModel))) {
       throw forbidden(`Model ${requestedModel} not allowed on this key`);
     }
 
@@ -1069,15 +1004,15 @@ export class RelayService {
     const node = allNodes[0];
 
     // Replace model with upstream model
-    formData.set("model", routes[0]?.upstreamModel ?? requestedModel);
+    formData.set("model", routes.find(r => r.channelId === node.channelId)?.upstreamModel ?? requestedModel);
 
     const ctx: RelayContext = {
       requestId,
       apiKey: apiKey as any,
       model: requestedModel,
-      upstreamModel: routes[0]?.upstreamModel ?? requestedModel,
+      upstreamModel: routes.find(r => r.channelId === node.channelId)?.upstreamModel ?? requestedModel,
       channelId: node.channelId,
-      channelBillingMultiplier: 1.0,
+      channelBillingMultiplier: channels.find(c => c.id === node.channelId)?.billingMultiplier ?? 1,
       nodeId: node.id,
       nodeUrl: node.internalUrl,
       nodeApiKey: node.internalApiKey,
@@ -1105,7 +1040,7 @@ export class RelayService {
       }
 
       const responseBody = await response.json();
-      const editUsage = this.extractUsage(responseBody, "openai");
+      const editUsage = openAiUsage((responseBody as any).usage);
       await this.settleImage(ctx, editUsage, "succeeded", 200, "/v1/images/edits");
       reply.code(200).header("content-type", "application/json").send(responseBody);
     } catch (err: any) {
@@ -1131,26 +1066,10 @@ export class RelayService {
       let billableUnits = 0n;
       let pricingDetail: any = undefined;
 
-      if (alias && (usage.inputTokens > 0 || usage.outputTokens > 0)) {
-        const multiplier = ctx.apiKey.plan?.billingMultiplier ?? 1;
-        const ppt = (p: number) => p / 1_000_000;
-
-        const inputCostUsd = usage.inputTokens * ppt(alias.inputPrice);
-        const cacheWriteCostUsd = usage.cacheCreationTokens * ppt(alias.cacheWrite5mPrice);
-        const cacheReadCostUsd = usage.cacheReadTokens * ppt(alias.cacheReadPrice);
-        const outputCostUsd = usage.outputTokens * ppt(alias.outputPrice);
-
-        const totalUsd = inputCostUsd + cacheWriteCostUsd + cacheReadCostUsd + outputCostUsd;
-        billableUnits = BigInt(Math.round(totalUsd * 1_000_000 * multiplier));
-
-        pricingDetail = {
-          inputTokens: usage.inputTokens, inputPrice: alias.inputPrice, inputCostUsd: +inputCostUsd.toFixed(6),
-          cacheCreationTokens: usage.cacheCreationTokens, cacheWrite5mPrice: alias.cacheWrite5mPrice, cacheWriteCostUsd: +cacheWriteCostUsd.toFixed(6),
-          cacheReadTokens: usage.cacheReadTokens, cacheReadPrice: alias.cacheReadPrice, cacheReadCostUsd: +cacheReadCostUsd.toFixed(6),
-          outputTokens: usage.outputTokens, outputPrice: alias.outputPrice, outputCostUsd: +outputCostUsd.toFixed(6),
-          totalUsd: +totalUsd.toFixed(6),
-          billingMultiplier: multiplier,
-        };
+      if (alias && (usage.inputTokens > 0 || usage.outputTokens > 0 || usage.cacheReadTokens > 0 || usage.cacheCreationTokens > 0 || (usage.imageInputTokens ?? 0) > 0)) {
+        const priced = calculateTokenPrice(alias, usage, ctx.apiKey.plan?.billingMultiplier ?? 1, ctx.channelBillingMultiplier ?? 1);
+        billableUnits = priced.billableUnits;
+        pricingDetail = priced.detail;
       }
 
       const period = finishedAt.toISOString().slice(0, 7).replace("-", "");
@@ -1166,7 +1085,7 @@ export class RelayService {
             actualUpstreamModel: ctx.upstreamModel,
             channelId: ctx.channelId,
             nodeId: ctx.nodeId,
-            stream: false,
+            stream: ctx.stream ?? false,
             status: status as any,
             httpStatus,
             errorCode: errorCode ?? null,
@@ -1292,12 +1211,8 @@ export class RelayService {
         cacheReadTokens: body.usage?.cache_read_input_tokens ?? 0,
       };
     }
-    return {
-      inputTokens: body.usage?.prompt_tokens ?? 0,
-      outputTokens: body.usage?.completion_tokens ?? 0,
-      cacheCreationTokens: 0,
-      cacheReadTokens: body.usage?.prompt_tokens_details?.cached_tokens ?? 0,
-    };
+    const u = openAiUsage(body.usage);
+    return { ...u, inputTokens: u.inputTokens + (u.imageInputTokens ?? 0), cacheReadTokens: u.cacheReadTokens + (u.imageCacheReadTokens ?? 0), imageInputTokens: 0, imageCacheReadTokens: 0 };
   }
 
   private extractTokensFromSSE(chunk: string, protocol: "anthropic" | "openai"): UsageInfo {
@@ -1323,10 +1238,12 @@ export class RelayService {
             outputTokens = parsed.usage.output_tokens ?? 0;
           }
         } else {
-          if (parsed.usage) {
-            inputTokens = parsed.usage.prompt_tokens ?? 0;
-            outputTokens = parsed.usage.completion_tokens ?? 0;
-            cacheReadTokens = parsed.usage.prompt_tokens_details?.cached_tokens ?? 0;
+          const u = parsed.usage ?? parsed.response?.usage;
+          if (u) {
+            const normalized = openAiUsage(u);
+            inputTokens = Math.max(inputTokens, normalized.inputTokens + (normalized.imageInputTokens ?? 0));
+            outputTokens = Math.max(outputTokens, normalized.outputTokens);
+            cacheReadTokens = Math.max(cacheReadTokens, normalized.cacheReadTokens + (normalized.imageCacheReadTokens ?? 0));
           }
         }
       } catch {}

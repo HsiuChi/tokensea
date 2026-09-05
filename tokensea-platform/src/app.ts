@@ -8,6 +8,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { envSchema, type Env } from "./config/env.js";
+import { ZodError } from "zod";
 import { AppError } from "./lib/errors.js";
 import { registerRoutes } from "./routes/index.js";
 
@@ -33,6 +34,7 @@ export async function buildApp() {
   const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: 3 });
 
   const app = Fastify({
+    trustProxy: process.env.TRUSTED_PROXY_CIDRS?.split(",").filter(Boolean) ?? false,
     logger: {
       level: env.NODE_ENV === "production" ? "info" : "debug",
     },
@@ -68,6 +70,10 @@ export async function buildApp() {
       return;
     }
 
+    if (error instanceof ZodError) {
+      reply.code(400).send({ error: { code: "VALIDATION_ERROR", message: error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join("; ") } });
+      return;
+    }
     if ((error as any).validation) {
       reply.code(400).send({
         error: { code: "VALIDATION_ERROR", message: (error as Error).message },

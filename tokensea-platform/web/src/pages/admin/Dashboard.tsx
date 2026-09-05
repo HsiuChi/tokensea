@@ -60,7 +60,7 @@ export function AdminDashboard() {
     { label: t("admin.dashboard.totalUsers"), value: formatNumber(stats.totalUsers), sub: t("admin.dashboard.active", { count: stats.activeUsers }) },
     { label: t("admin.dashboard.apiKeys"), value: formatNumber(stats.totalKeys), sub: t("admin.dashboard.active", { count: stats.activeKeys }) },
     { label: t("admin.dashboard.totalRequests"), value: formatNumber(stats.totalRequests), sub: t("admin.dashboard.today", { count: stats.todayRequests }) },
-    { label: t("admin.dashboard.totalRevenue"), value: formatQuota(stats.totalRevenue), sub: t("admin.dashboard.allTime") },
+    { label: "累计用户消费", value: formatQuota(stats.totalRevenue), sub: "按请求扣费汇总，不代表支付收入或利润" },
   ];
 
   return (
@@ -142,7 +142,7 @@ export function AdminDashboard() {
         )}
         {stats.byChannel && stats.byChannel.length > 0 && (
           <Card>
-            <CardHeader><CardTitle>{t("admin.dashboard.byChannel") || "Cost by Channel"}</CardTitle></CardHeader>
+            <CardHeader><CardTitle>渠道消费分布（非上游成本）</CardTitle></CardHeader>
             <CardContent>
               <VChart
                 spec={{

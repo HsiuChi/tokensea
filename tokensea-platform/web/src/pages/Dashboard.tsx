@@ -54,9 +54,8 @@ export function DashboardPage() {
 
   const totals = stats?.totals ?? {}
   const totalTokens = Number(totals.inputTokens || 0) + Number(totals.outputTokens || 0)
-  const succeeded = logs.filter((log) => log.status === "succeeded").length
-  const successRate = logs.length ? (succeeded / logs.length) * 100 : 100
-  const avgLatency = logs.length ? Math.round(logs.reduce((sum, log) => sum + Number(log.durationMs || 0), 0) / logs.length) : 0
+  const successRate = stats?.quality?.successRate ?? null
+  const avgLatency = stats?.quality?.p95LatencyMs ?? null
 
   const chartData = useMemo(() => {
     const daily = stats?.daily ?? []
@@ -99,7 +98,7 @@ export function DashboardPage() {
     { label: "请求数", value: formatNumber(Number(totals.billedRequests || 0)), sub: period === "7d" ? "近 7 天" : "近 30 天", icon: Activity, color: "blue" },
     { label: "总 Tokens", value: formatNumber(totalTokens), sub: `输入 ${formatNumber(Number(totals.inputTokens || 0))}`, icon: Sparkles, color: "cyan" },
     { label: "本期费用", value: formatQuota(totals.billableUnits || 0), sub: period === "7d" ? "近 7 天" : "近 30 天", icon: CircleDollarSign, color: "indigo" },
-    { label: "成功率", value: `${successRate.toFixed(2)}%`, sub: logs.length ? `最近 ${logs.length} 次请求` : "暂无失败请求", icon: ShieldCheck, color: "emerald" },
+    { label: "成功率", value: successRate === null ? "—" : `${successRate.toFixed(2)}%`, sub: `${period === "7d" ? "近 7 天" : "近 30 天"} · ${stats?.quality?.totalRequests ?? 0} 次请求`, icon: ShieldCheck, color: "emerald" },
   ]
 
   const iconTone: Record<string, string> = {
@@ -160,9 +159,9 @@ export function DashboardPage() {
       </div>
       <div className="space-y-4">
         <div className={`${cardClass} p-5`}>
-          <div className="flex items-center justify-between"><h2 className="font-extrabold text-slate-950 dark:text-white">网关状态</h2><span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-600 dark:bg-emerald-500/10">运行正常</span></div>
-          <div className="mt-4 grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60"><div><p className="text-xs text-slate-500">P95 延迟</p><p className="mt-1 font-bold">{avgLatency ? formatLatency(avgLatency) : "—"}</p></div><div><p className="text-xs text-slate-500">错误率</p><p className="mt-1 font-bold">{(100 - successRate).toFixed(2)}%</p></div></div>
-          <div className="mt-3 divide-y divide-slate-100 dark:divide-slate-800">{providerStatus.map((provider) => <div key={provider.name} className="flex items-center justify-between py-2 text-sm"><span className="font-semibold text-slate-700 dark:text-slate-300">{provider.name}</span><span className={provider.ready ? "text-emerald-600" : "text-slate-400"}>{provider.ready ? "可用" : "未配置"}</span></div>)}</div>
+          <div className="flex items-center justify-between"><h2 className="font-extrabold text-slate-950 dark:text-white">请求质量</h2><span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-600 dark:bg-emerald-500/10">所选时段</span></div>
+          <div className="mt-4 grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60"><div><p className="text-xs text-slate-500">P95 延迟</p><p className="mt-1 font-bold">{avgLatency !== null ? formatLatency(avgLatency) : "—"}</p></div><div><p className="text-xs text-slate-500">错误率</p><p className="mt-1 font-bold">{successRate === null ? "—" : `${(100 - successRate).toFixed(2)}%`}</p></div></div>
+          <div className="mt-3 divide-y divide-slate-100 dark:divide-slate-800">{providerStatus.map((provider) => <div key={provider.name} className="flex items-center justify-between py-2 text-sm"><span className="font-semibold text-slate-700 dark:text-slate-300">{provider.name}</span><span className={provider.ready ? "text-emerald-600" : "text-slate-400"}>{provider.ready ? "已上架" : "未配置"}</span></div>)}</div>
           <button onClick={() => navigate("/app/channels")} className="mt-2 inline-flex items-center gap-1 text-sm font-bold text-blue-600">查看渠道状态<ArrowRight className="h-4 w-4" /></button>
         </div>
         <div className={`${cardClass} p-5`}>

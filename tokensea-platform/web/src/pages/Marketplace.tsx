@@ -481,7 +481,7 @@ function ModelCard({ model, onClick, t, onTry }: { model: any; onClick: () => vo
         </div>
 
         {/* Context window bar */}
-        {!isVideo && <div>
+        {!isVideo && model.category !== "image" && <div>
           <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 mb-1">
             <span>{t("marketplace.contextWindow")}</span>
             <span>{ctx ? `${(ctx / 1000).toFixed(0)}K` : "—"}</span>
@@ -527,6 +527,9 @@ function ModelCard({ model, onClick, t, onTry }: { model: any; onClick: () => vo
 
 function getCurlExample(model: any) {
   const alias = model.alias
+  if (model.category === "image") {
+    return 'curl https://api.tokensea.dev/v1/images/generations -H "Authorization: Bearer $TOKENSEA_API_KEY" -H "Content-Type: application/json" -d ' + "'" + JSON.stringify({model: alias, prompt: "海面上的蓝色帆船", size: "1024x1024", quality: "low", n: 1}, null, 2) + "'"
+  }
   if (model.category !== "video") {
     return `curl https://api.tokensea.dev/v1/chat/completions \\
   -H "Authorization: Bearer YOUR_TOKENSEA_KEY" \\
@@ -577,6 +580,7 @@ function getCurlExample(model: any) {
 
 function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => void }) {
   const [copied, setCopied] = useState(false)
+  const [language, setLanguage] = useState("curl")
   const theme = getProviderTheme(model.provider)
   const description = getPublicDescription(model.description)
   const tags = (model.tags as string[]) ?? []
@@ -592,6 +596,11 @@ function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => voi
   }
 
   const curlExample = getCurlExample(model)
+  const python = 'import os\nfrom openai import OpenAI\n\nclient = OpenAI(api_key=os.environ["TOKENSEA_API_KEY"],\n                base_url="https://api.tokensea.dev/v1")\n\n' +
+    (model.category === "image"
+      ? 'result = client.images.generate(model="' + model.alias + '", prompt="海面上的蓝色帆船", size="1024x1024", quality="low")\n# 图片在 result.data[0].b64_json；用量在 result.usage'
+      : 'result = client.chat.completions.create(\n    model="' + model.alias + '",\n    messages=[{"role":"user","content":"你好"}]\n)\nprint(result.choices[0].message.content)')
+  const example = language === "python" && !isVideo ? python : curlExample
 
   return (
     <div className="p-7 space-y-6">
@@ -797,11 +806,15 @@ function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => voi
         </div>
       )}
 
+      {model.pricing?.imageInputPrice != null && <div className="rounded-xl border bg-muted/50 p-4 text-sm space-y-1"><p>图片按实际 Tokens 计费，不是固定每张价格。</p><p>文字输入 / 缓存：$ {model.inputPrice} / $ {model.cacheReadPrice}／百万 Tokens</p><p>图片输入 / 缓存 / 输出：$ {model.pricing.imageInputPrice} / $ {model.pricing.imageCacheReadPrice} / $ {model.outputPrice}／百万 Tokens</p></div>}
+      {model.pricing?.longContext && <p className="text-sm text-muted-foreground">输入超过 {model.pricing.longContext.threshold.toLocaleString()} Tokens 时，整次请求输入与缓存价格 × {model.pricing.longContext.inputMultiplier}，输出价格 × {model.pricing.longContext.outputMultiplier}。</p>}
+      <p className="text-xs text-muted-foreground">展示为基础单价，最终费用受套餐与渠道倍率影响；请求日志可查看计费快照。请使用 TokenSea 密钥，不是上游平台密钥。</p>
       {/* API example */}
       <div>
-        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">{t("marketplace.requestExample")}</p>
+        <div className="mb-3 flex flex-wrap items-center gap-2"><Button size="sm" variant={language === "curl" ? "default" : "outline"} onClick={()=>setLanguage("curl")}>cURL</Button>{!isVideo && <Button size="sm" variant={language === "python" ? "default" : "outline"} onClick={()=>setLanguage("python")}>Python SDK</Button>}<Button size="sm" variant="outline" onClick={async()=>{await navigator.clipboard.writeText(example);setCopied(true);setTimeout(()=>setCopied(false),1500)}}>{copied ? "已复制" : "复制示例"}</Button></div>
+        <p className="mb-2 text-xs text-muted-foreground">{language === "python" ? "安装：pip install openai。将密钥存入环境变量 TOKENSEA_API_KEY。" : "将 YOUR_TOKENSEA_KEY 替换为您的 TokenSea 密钥；图片示例使用环境变量 TOKENSEA_API_KEY。"}</p>
         <div className="rounded-2xl border border-slate-200 bg-slate-950 p-4 overflow-x-auto dark:border-slate-800">
-          <pre className="text-xs font-mono text-slate-300 whitespace-pre">{curlExample}</pre>
+          <pre className="text-xs font-mono text-slate-300 whitespace-pre">{example}</pre>
         </div>
       </div>
 

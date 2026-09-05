@@ -1,4 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
+import { notFound } from "../../lib/errors.js";
+import { errorExplanation, csvCell } from "./request-detail.js";
+import { timeRange, qualityStats } from "./statistics.js";
 
 export class LogService {
   constructor(private prisma: PrismaClient) {}
@@ -15,9 +18,7 @@ export class LogService {
     if (opts.status) where.status = opts.status;
     if (opts.requestedModel) where.requestedModel = { contains: opts.requestedModel, mode: "insensitive" };
     if (opts.startDate || opts.endDate) {
-      where.startedAt = {};
-      if (opts.startDate) where.startedAt.gte = new Date(opts.startDate);
-      if (opts.endDate) where.startedAt.lte = new Date(opts.endDate);
+      where.startedAt = timeRange("30d", opts.startDate, opts.endDate);
     }
 
     const [items, total] = await Promise.all([
@@ -27,53 +28,12 @@ export class LogService {
     return { items, total, page, pageSize };
   }
 
-  async getUsageStats(userId: bigint, period: string, startDate?: string, endDate?: string) {
-    // Resolve date range
-    const now = new Date();
-    let gte: Date;
-    let isRelative = false;
-    if (startDate) {
-      gte = new Date(startDate);
-      isRelative = true;
-    } else if (/^\d{6}$/.test(period)) {
-      gte = new Date(`${period.slice(0, 4)}-${period.slice(4)}-01`);
-    } else if (period === "24h") {
-      gte = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-      isRelative = true;
-    } else if (period === "7d") {
-      gte = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-      isRelative = true;
-    } else if (period === "30d") {
-      gte = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-      isRelative = true;
-    } else {
-      gte = new Date(`${period.slice(0, 4)}-${period.slice(4)}-01`);
-    }
-
-    const logWhere: any = { userId, startedAt: { gte } };
-    if (endDate) {
-      logWhere.startedAt.lte = new Date(endDate);
-    }
-
-    // For fixed monthly periods use ledgers; for relative periods compute from logs
-    let totals: { billedRequests: number; inputTokens: number; outputTokens: number; cacheCreationTokens: number; cacheReadTokens: number; billableUnits: bigint };
-    if (!isRelative) {
-      const ledgers = await this.prisma.usageLedger.findMany({
-        where: { userId, billingPeriod: period },
-        orderBy: { createdAt: "desc" },
-      });
-      totals = ledgers.reduce((acc, l) => ({
-        billedRequests: acc.billedRequests + l.billedRequests,
-        inputTokens: acc.inputTokens + l.inputTokens,
-        outputTokens: acc.outputTokens + l.outputTokens,
-        cacheCreationTokens: (acc.cacheCreationTokens ?? 0) + (l.cacheCreationTokens ?? 0),
-        cacheReadTokens: (acc.cacheReadTokens ?? 0) + (l.cacheReadTokens ?? 0),
-        billableUnits: acc.billableUnits + l.billableUnits,
-      }), { billedRequests: 0, inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, billableUnits: 0n });
-    } else {
-      totals = { billedRequests: 0, inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, billableUnits: 0n };
-    }
-
+  async getUsageStats(userId: bigint, period: string, startDate?: string, endDate?: string, filters?: { status?: string; requestedModel?: string }) {
+    const range = timeRange(period, startDate, endDate);
+    const logWhere: any = { userId, startedAt: range };
+    if (filters?.status) logWhere.status = filters.status;
+    if (filters?.requestedModel) logWhere.requestedModel = { contains: filters.requestedModel, mode: "insensitive" };
+    const totals = { billedRequests: 0, inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, billableUnits: 0n };
     // Daily breakdown with per-model detail from request logs
     const dailyMap = new Map<string, { requests: number; tokens: number; cost: bigint; models: Map<string, { requests: number; cost: bigint }> }>();
     const logs = await this.prisma.requestLog.findMany({
@@ -82,7 +42,7 @@ export class LogService {
     });
 
     for (const log of logs) {
-      if (isRelative) {
+      {
         totals.billedRequests++;
         totals.inputTokens += log.inputTokens;
         totals.outputTokens += log.outputTokens;
@@ -141,10 +101,32 @@ export class LogService {
 
     return {
       period,
+      range: { start: range.gte.toISOString(), end: range.lt.toISOString(), timezone: "UTC" },
+      quality: qualityStats(logs),
       totals: { ...totals, billableUnits: totals.billableUnits.toString() },
       daily,
       modelBreakdown,
     };
+  }
+
+  async requestDetail(userId: bigint, requestId: string) {
+    const log = await this.prisma.requestLog.findFirst({ where: { requestId, userId } });
+    if (!log) throw notFound("Request not found");
+    const { nodeId, channelId, ...safe } = log;
+    return { ...safe, errorExplanation: errorExplanation(log), billingExplanation: log.pricingDetail
+      ? "按请求发生时记录的 Token 用量 × 单价 × 倍率结算，金额四舍五入到 0.000001 美元；下方为当时的计费快照。"
+      : log.billableUnits === 0n ? "此请求未扣费；没有保存计费快照。" : "历史记录缺少计费快照，不使用当前价格反推历史费用。" };
+  }
+
+  async exportRequests(userId: bigint, opts: { startDate?: string; endDate?: string; status?: string; requestedModel?: string }) {
+    const where: any = { userId, startedAt: timeRange("30d", opts.startDate, opts.endDate) };
+    if (opts.status) where.status = opts.status;
+    if (opts.requestedModel) where.requestedModel = { contains: opts.requestedModel, mode: "insensitive" };
+    const rows = await this.prisma.requestLog.findMany({ where, orderBy: [{ startedAt: "desc" }, { id: "desc" }], take: 10001 });
+    const truncated = rows.length > 10000;
+    const header = ["请求 ID", "时间 UTC", "模型", "接口", "状态", "HTTP", "错误代码", "输入 Tokens", "输出 Tokens", "缓存读取", "缓存写入", "耗时 ms", "费用 USD", "计费快照"];
+    const csv = "\uFEFF" + [header, ...rows.slice(0,10000).map(l => [l.requestId, l.startedAt.toISOString(), l.requestedModel, l.endpoint, l.status, l.httpStatus, l.errorCode, l.inputTokens, l.outputTokens, l.cacheReadTokens, l.cacheCreationTokens, l.durationMs, (Number(l.billableUnits)/1e6).toFixed(6), JSON.stringify(l.pricingDetail)])].map(row => row.map(csvCell).join(",")).join("\r\n");
+    return { csv, count: Math.min(rows.length,10000), truncated, message: truncated ? "最多导出 10000 条，请缩小时间范围导出其余记录。" : "" };
   }
 
   async listAuditLogs(opts?: { page?: number; pageSize?: number; actorId?: bigint }) {

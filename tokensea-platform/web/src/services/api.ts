@@ -48,7 +48,7 @@ export const api = {
   // Tokens
   listTokens: (page = 1, pageSize = 20) =>
     request<any>(`/api/token/?page=${page}&pageSize=${pageSize}`),
-  createToken: (body: { name: string; planId?: number; quota?: number; models?: string[]; expiresAt?: string }) =>
+  createToken: (body: { name: string; quota?: number | string; models?: string[]; expiresAt?: string; allowedIps?: string[] }) =>
     request<{ apiKey: any; key: string }>("/api/token/", { method: "POST", body: JSON.stringify(body) }),
   updateToken: (id: string, body: any) =>
     request<any>(`/api/token/${id}`, { method: "PUT", body: JSON.stringify(body) }),
@@ -91,6 +91,7 @@ export const api = {
   testNode: (channelId: string, nodeId: string, model?: string) => request<any>(`/api/channel/${channelId}/nodes/${nodeId}/test`, { method: "POST", body: JSON.stringify(model ? { model } : {}) }),
 
   // Webhooks
+  getChannelOperations: () => request<any>("/api/channel/operations"),
   listWebhooks: () => request<any>("/api/webhook/"),
   listWebhookEvents: () => request<any>("/api/webhook/events"),
   createWebhook: (body: any) => request<any>("/api/webhook/", { method: "POST", body: JSON.stringify(body) }),
@@ -121,8 +122,12 @@ export const api = {
     if (params.endDate) qs.set("endDate", params.endDate);
     return request<any>(`/api/log/self?${qs.toString()}`);
   },
-  getSelfStats: (params?: { period?: string; startDate?: string; endDate?: string }) => {
+  getSelfLogDetail: (id: string) => request<any>(`/api/log/self/${id}`),
+  exportSelfLogs: (params: Record<string,string>) => request<any>(`/api/log/self/export?${new URLSearchParams(params)}`),
+  getSelfStats: (params?: { period?: string; startDate?: string; endDate?: string; status?: string; requestedModel?: string }) => {
     const qs = new URLSearchParams();
+    if (params?.status) qs.set("status", params.status);
+    if (params?.requestedModel) qs.set("requestedModel", params.requestedModel);
     if (params?.period) qs.set("period", params.period);
     if (params?.startDate) qs.set("startDate", params.startDate);
     if (params?.endDate) qs.set("endDate", params.endDate);

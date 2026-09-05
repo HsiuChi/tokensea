@@ -25,7 +25,7 @@ export async function webhookRoutes(app: FastifyInstance) {
 
   app.put("/:id", { preHandler: adminAuthHook }, async (request) => {
     const { id } = z.object({ id: z.coerce.bigint() }).parse(request.params);
-    const body = request.body as Record<string, any>;
+    const body = z.object({ url: z.string().url().max(512).optional(), events: z.array(z.string()).min(1).optional(), secret: z.string().max(128).optional(), status: z.enum(["active","disabled"]).optional() }).parse(request.body);
     return { data: await svc.update(id, body) };
   });
 
