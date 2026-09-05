@@ -113,3 +113,9 @@ test("streaming usage survives arbitrary network chunk boundaries without cumula
     assert.equal(settled[1].inputTokens,30);assert.equal(settled[1].cacheReadTokens,70);assert.equal(settled[1].outputTokens,9);assert.equal(settled[2],"succeeded");
   }finally{globalThis.fetch=original}
 });
+
+test("cache writes have their own disjoint bucket",()=>{
+  const u=openAiUsage({input_tokens:1000,output_tokens:0,input_tokens_details:{cached_tokens:500,cached_creation_tokens:200}});
+  assert.equal(u.inputTokens,300);assert.equal(u.cacheReadTokens,500);assert.equal(u.cacheCreationTokens,200);
+  assert.equal(calculateTokenPrice(REVIEWED_OPENAI_MODELS[0],u).billableUnits,6000n);
+});

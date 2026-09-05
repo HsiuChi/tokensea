@@ -414,6 +414,7 @@ export class RelayService {
     let cacheReadTokens = 0;
     let pending = "";
     let failed = false;
+    let terminal = false;
 
     if (response.body) {
       const reader = response.body.getReader();
@@ -433,6 +434,7 @@ export class RelayService {
           if (end < 0) continue;
           const complete = pending.slice(0, end + 1);
           pending = pending.slice(end + 1);
+          if (complete.includes("[DONE]") || /"type"\s*:\s*"(response.completed|response.done|message_stop)"/.test(complete)) terminal = true;
           const tokenInfo = this.extractTokensFromSSE(complete, ctx.protocol);
           inputTokens = Math.max(inputTokens, tokenInfo.inputTokens);
           outputTokens = Math.max(outputTokens, tokenInfo.outputTokens);
@@ -446,6 +448,7 @@ export class RelayService {
       }
     }
 
+    if (!terminal) failed = true;
     reply.raw.end();
     await this.settle(ctx, { inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens }, failed ? "failed" : "succeeded", failed ? 502 : 200, failed ? "stream_interrupted" : undefined);
   }
@@ -1245,6 +1248,7 @@ export class RelayService {
             const normalized = openAiUsage(u);
             inputTokens = Math.max(inputTokens, normalized.inputTokens + (normalized.imageInputTokens ?? 0));
             outputTokens = Math.max(outputTokens, normalized.outputTokens);
+            cacheCreationTokens = Math.max(cacheCreationTokens, normalized.cacheCreationTokens);
             cacheReadTokens = Math.max(cacheReadTokens, normalized.cacheReadTokens + (normalized.imageCacheReadTokens ?? 0));
           }
         }

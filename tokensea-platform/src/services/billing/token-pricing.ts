@@ -12,12 +12,13 @@ export function openAiUsage(u: any = {}): TokenUsage {
   const input = u.prompt_tokens ?? u.input_tokens ?? 0;
   const details = u.prompt_tokens_details ?? u.input_tokens_details ?? {};
   const cached = Math.min(input, details.cached_tokens ?? 0);
-  const image = Math.min(input, details.image_tokens ?? 0);
+  const created = Math.min(input - cached, details.cached_creation_tokens ?? details.cache_write_tokens ?? 0);
+  const image = Math.min(input - created, details.image_tokens ?? 0);
   const imageCached = Math.min(image, details.cached_tokens_details?.image_tokens ?? 0);
   return {
-    inputTokens: Math.max(0, input - cached - image + imageCached),
+    inputTokens: Math.max(0, input - cached - created - image + imageCached),
     outputTokens: u.completion_tokens ?? u.output_tokens ?? 0,
-    cacheCreationTokens: 0,
+    cacheCreationTokens: created,
     cacheReadTokens: Math.max(0, cached - imageCached),
     imageInputTokens: Math.max(0, image - imageCached),
     imageCacheReadTokens: imageCached,
