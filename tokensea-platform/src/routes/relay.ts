@@ -83,8 +83,11 @@ export async function relayRoutes(app: FastifyInstance) {
       },
       max_context: m.maxContext,
       pricing: {
-        input_per_1k: m.inputPrice,
-        output_per_1k: m.outputPrice,
+        currency: 'USD',
+        input_per_1m: m.inputPrice,
+        output_per_1m: m.outputPrice,
+        input_per_1k: m.inputPrice / 1000,
+        output_per_1k: m.outputPrice / 1000,
       },
     }));
 

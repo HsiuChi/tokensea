@@ -43,7 +43,7 @@ function inspectInput(body: any) {
 
 /** Temporary hold estimate only. Final settlement always uses reported usage and frozen tariffs. */
 export function quoteReservation(alias: any, body: any, planMultiplier = 1, channelMultiplier = 1, image = false) {
-  if (alias.category === "video") return quoteVideo(alias.alias, body, Number(alias.pricing?.cnyPerUsd ?? process.env.KSYUN_CNY_PER_USD ?? 7.2), planMultiplier, channelMultiplier);
+  if (alias.category === "video") return quoteVideo(alias.alias, body, Number(alias.pricing?.cnyPerUsd ?? process.env.KSYUN_CNY_PER_USD ?? 7.2), planMultiplier, channelMultiplier, alias.pricing?.saleMultiplier ?? 1);
   const rates = [alias.inputPrice, alias.outputPrice, alias.cacheReadPrice ?? 0, alias.cacheWrite5mPrice ?? 0,
     alias.cacheWrite1hPrice ?? 0, alias.pricing?.imageInputPrice ?? 0, planMultiplier, channelMultiplier];
   if (rates.some(price => !Number.isFinite(price) || price < 0)) throw badRequest("Invalid billing configuration");

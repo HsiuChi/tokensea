@@ -1,3 +1,4 @@
+import { CNY_PER_USD } from '../../shared/money.js';
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
@@ -25,7 +26,7 @@ export function openAiUsage(u: any = {}): TokenUsage {
   };
 }
 
-export function calculateTokenPrice(alias: any, usage: TokenUsage, planMultiplier = 1, channelMultiplier = 1) {
+export function calculateTokenPrice(alias: any, usage: TokenUsage, planMultiplier = 1, channelMultiplier = 1): {billableUnits:bigint;detail:any} {
   const rules = alias.pricing ?? {};
   const inputTotal = usage.inputTokens + usage.cacheReadTokens + usage.cacheCreationTokens + (usage.imageInputTokens ?? 0) + (usage.imageCacheReadTokens ?? 0);
   const long = rules.longContext && inputTotal > rules.longContext.threshold;
@@ -46,12 +47,15 @@ export function calculateTokenPrice(alias: any, usage: TokenUsage, planMultiplie
   const totalUsd = inputCostUsd + cacheReadCostUsd + cacheWriteCostUsd + outputCostUsd + imageInputCostUsd + imageCacheReadCostUsd;
   const billingMultiplier = planMultiplier * channelMultiplier;
   const billableUnits = BigInt(Math.round(totalUsd * billingMultiplier * 1e6));
+  const costBasis=rules.internalCost;
+  const estimatedCost=costBasis?.prices?calculateTokenPrice({...alias,...costBasis.prices,pricing:costBasis.rules??{}},usage).billableUnits:null;
   return { billableUnits, detail: {
     version: 2, currency: "USD", unit: "1M tokens", ...usage,
     inputPrice, cacheReadPrice, cacheWrite5mPrice, outputPrice, imageInputPrice, imageCacheReadPrice,
     inputCostUsd, cacheReadCostUsd, cacheWriteCostUsd, outputCostUsd, imageInputCostUsd, imageCacheReadCostUsd,
     totalUsd, planMultiplier, channelMultiplier, billingMultiplier,
-    costUsd: Number(billableUnits) / 1e6, longContext: !!long,
+    costUsd: Number(billableUnits) / 1e6, costCny:Number(billableUnits)/1e6*CNY_PER_USD,cnyPerUsd:CNY_PER_USD,priceVersion:rules.priceVersion??null,longContext: !!long,
+    ...(estimatedCost===null?{}:{internalCost:{estimated:true,kind:costBasis.kind,costUsd:Number(estimatedCost)/1e6,profitUsd:Number(billableUnits-estimatedCost)/1e6}}),
     tokenAccounting: "disjoint", source: rules.sourceUrl ?? null,
   }};
 }

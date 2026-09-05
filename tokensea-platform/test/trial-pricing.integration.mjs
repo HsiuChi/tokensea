@@ -1,0 +1,35 @@
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { PrismaClient } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
+import { ReservationService } from '../src/services/billing/reservation-service.ts';
+if(!process.env.DATABASE_URL?.includes('/billing_test')) throw Error('Isolated billing_test required');
+const p = new PrismaClient();
+try {
+  const m=await p.modelAlias.create({data:{alias:'gpt-5.6-sol',displayName:'Sol',provider:'openai',inputPrice:4,outputPrice:20}});
+  const c=await p.channel.create({data:{name:'pricing-test',type:'codex',models:[],billingMultiplier:1.5}});
+  await p.modelRoute.create({data:{aliasId:m.id,channelId:c.id,upstreamModel:m.alias}});
+  const u=await p.user.create({data:{username:'price_test',passwordHash:'not-login',inviteCode:'price_test',quota:10000000n}});
+  const k=await p.apiKey.create({data:{userId:u.id,name:'test',keyHash:randomUUID(),keyPrefix:'test',quota:-1n}});
+  const svc=new ReservationService(p), old=randomUUID(), body={max_tokens:100,prompt:'hi'};
+  await svc.reserve(old,k.id,m,body,{[c.id]:1.5});
+  const before=await p.user.findUnique({where:{id:u.id}});
+  const run=(...args)=>execFileSync(process.execPath,['--import','tsx','scripts/apply-trial-pricing.ts',...args],{env:process.env,encoding:'utf8'});
+  run();
+  assert.equal((await p.modelAlias.findUnique({where:{id:m.id}})).inputPrice,4);
+  run('--apply');
+  assert.deepEqual(await p.user.findUnique({where:{id:u.id}}),before,'price migration must not alter wallet');
+  assert.equal((await p.channel.findUnique({where:{id:c.id}})).billingMultiplier,1);
+  assert.match(run('--apply'),/"changedModels": 0/);
+  assert.equal(await p.auditLog.count({where:{action:'trial_pricing.apply'}}),1,'idempotent apply writes no duplicate audit');
+  const usage={inputTokens:100,outputTokens:10,cacheReadTokens:0,cacheCreationTokens:0};
+  const context=id=>({requestId:id,model:m.alias,upstreamModel:m.alias,channelId:c.id,endpoint:'/v1/chat/completions',startedAt:new Date()});
+  await svc.finish(context(old),usage,'succeeded',200);
+  assert.equal((await p.requestLog.findUnique({where:{requestId:old}})).billableUnits,900n,'pending requests retain old tariff and channel multiplier');
+  const updated=await p.modelAlias.findUnique({where:{id:m.id}}), next=randomUUID();
+  await svc.reserve(next,k.id,updated,body,{[c.id]:1});
+  await svc.finish(context(next),usage,'succeeded',200);
+  assert.equal((await p.requestLog.findUnique({where:{requestId:next}})).billableUnits,180n,'new requests use explicit retail prices once');
+  assert((await svc.reconcile(u.id)).balanced);
+  console.log('Trial migration: dry run, idempotence, unchanged balance, frozen old requests and new settlement PASS');
+} finally { await p.$disconnect(); }

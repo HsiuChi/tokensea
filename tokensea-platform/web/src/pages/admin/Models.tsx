@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "@/services/api";
-import { formatQuota } from "@/lib/utils";
+import { formatMoney } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -354,8 +354,8 @@ export function AdminModels() {
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="text-xs text-muted-foreground">
-                      In: {formatQuota(m.inputPrice)} · Out: {formatQuota(m.outputPrice)}
-                      {m.cacheReadPrice ? ` · Cache R: ${formatQuota(m.cacheReadPrice)}` : ""}
+                      In: {formatMoney(m.inputPrice)}/M · Out: {formatMoney(m.outputPrice)}/M
+                      {m.cacheReadPrice ? ` · Cache R: ${formatMoney(m.cacheReadPrice)}/M` : ""}
                     </span>
                     <Button size="sm" variant="outline" onClick={() => openPrice(m)}>
                       <DollarSign className="mr-1 h-3.5 w-3.5" /> {t("admin.models.editPrice")}

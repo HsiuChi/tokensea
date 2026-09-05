@@ -14,6 +14,7 @@ import {
 
 import { VendorIcon } from "@/components/VendorIcon"
 import { BillingEstimate } from "@/components/BillingEstimate"
+import {formatMoney,CNY_PER_USD} from '@/lib/utils'
 
 // ── Provider theme map ────────────────────────────────────────────
 interface ProviderTheme {
@@ -282,6 +283,7 @@ export function MarketplacePage() {
         })}
       </div>
 
+      <p className="mb-4 text-xs text-muted-foreground">TokenSea 试运营售价 · 人民币 / 美元同时展示 · 1 USD = {CNY_PER_USD} CNY（固定平台折算，非实时汇率）· 文本价格单位：百万 Tokens</p>
       <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
         {/* Sidebar filters */}
         <div className="flex flex-row gap-2 sm:flex-col sm:w-52 sm:shrink-0">
@@ -496,12 +498,12 @@ function ModelCard({ model, onClick, t, onTry }: { model: any; onClick: () => vo
         </div>}
 
         {/* Pricing row — $/M tokens */}
-        {!isVideo ? <div className="flex items-center justify-between text-[11px] font-medium pt-2 border-t border-slate-100 dark:border-slate-800/60">
-          <span className="text-slate-500 dark:text-slate-400">{t("marketplace.inputPrice")} <span className="font-bold text-slate-800 dark:text-slate-200 font-mono">${model.inputPrice}/M</span></span>
+        {!isVideo ? <div className="flex flex-col gap-1 text-[11px] font-medium pt-2 border-t border-slate-100 dark:border-slate-800/60">
+          <span className="text-slate-500 dark:text-slate-400">{t("marketplace.inputPrice")} <span className="font-bold text-slate-800 dark:text-slate-200 font-mono">{formatMoney(model.inputPrice)}/M</span></span>
           {model.cacheReadPrice > 0 && (
-            <span className="text-slate-500 dark:text-slate-400">{t("marketplace.cachePrice")} <span className="font-bold text-emerald-600 dark:text-emerald-400 font-mono">${model.cacheReadPrice}/M</span></span>
+            <span className="text-slate-500 dark:text-slate-400">{t("marketplace.cachePrice")} <span className="font-bold text-emerald-600 dark:text-emerald-400 font-mono">{formatMoney(model.cacheReadPrice)}/M</span></span>
           )}
-          <span className="text-slate-500 dark:text-slate-400">{t("marketplace.outputPrice")} <span className="font-bold text-slate-800 dark:text-slate-200 font-mono">${model.outputPrice}/M</span></span>
+          <span className="text-slate-500 dark:text-slate-400">{t("marketplace.outputPrice")} <span className="font-bold text-slate-800 dark:text-slate-200 font-mono">{formatMoney(model.outputPrice)}/M</span></span>
         </div> : (
           <div className="rounded-xl border border-fuchsia-100 bg-fuchsia-50/70 px-3 py-2 text-[11px] font-semibold text-fuchsia-700 dark:border-fuchsia-900/60 dark:bg-fuchsia-500/10 dark:text-fuchsia-300">
             {t("marketplace.videoBillingHint")}
@@ -716,7 +718,7 @@ function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => voi
                     return (
                       <div key={dim} className={`rounded-xl border p-2 ${c}`}>
                         <p className="text-[9px] opacity-60 font-bold">{labels[dim] || dim}</p>
-                        <p className={`text-sm font-black font-mono`}>${val}/M</p>
+                        <p className={`text-sm font-black font-mono`}>{formatMoney(val)}/M</p>
                       </div>
                     )
                   })}
@@ -730,11 +732,11 @@ function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => voi
             <div className="grid grid-cols-3 gap-3 text-center">
               <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-900/50">
                 <p className="text-[10px] text-slate-400 font-bold">{t("marketplace.baseInput")}</p>
-                <p className="text-lg font-black text-slate-900 dark:text-slate-100 font-mono">${model.inputPrice}/M</p>
+                <p className="text-sm font-black text-slate-900 dark:text-slate-100 font-mono">{formatMoney(model.inputPrice)}/M</p>
               </div>
               <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-900/50">
                 <p className="text-[10px] text-slate-400 font-bold">{t("marketplace.outputPrice")}</p>
-                <p className="text-lg font-black text-slate-900 dark:text-slate-100 font-mono">${model.outputPrice}/M</p>
+                <p className="text-sm font-black text-slate-900 dark:text-slate-100 font-mono">{formatMoney(model.outputPrice)}/M</p>
               </div>
               <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-900/50">
                 <p className="text-[10px] text-slate-400 font-bold">{t("marketplace.contextWindow")}</p>
@@ -745,19 +747,19 @@ function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => voi
               {model.cacheWrite5mPrice > 0 && (
                 <div className="rounded-2xl border border-orange-200 bg-orange-50/70 p-3 dark:border-orange-800 dark:bg-orange-900/20">
                   <p className="text-[10px] text-orange-500 font-bold">{t("marketplace.cacheWrite5m")}</p>
-                  <p className="text-lg font-black text-orange-700 dark:text-orange-300 font-mono">${model.cacheWrite5mPrice}/M</p>
+                  <p className="text-sm font-black text-orange-700 dark:text-orange-300 font-mono">{formatMoney(model.cacheWrite5mPrice)}/M</p>
                 </div>
               )}
               {model.cacheWrite1hPrice > 0 && (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-3 dark:border-amber-800 dark:bg-amber-900/20">
                   <p className="text-[10px] text-amber-500 font-bold">{t("marketplace.cacheWrite1h")}</p>
-                  <p className="text-lg font-black text-amber-700 dark:text-amber-300 font-mono">${model.cacheWrite1hPrice}/M</p>
+                  <p className="text-sm font-black text-amber-700 dark:text-amber-300 font-mono">{formatMoney(model.cacheWrite1hPrice)}/M</p>
                 </div>
               )}
               {model.cacheReadPrice > 0 && (
                 <div className="rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3 dark:border-emerald-800 dark:bg-emerald-900/20">
                   <p className="text-[10px] text-emerald-500 font-bold">{t("marketplace.cacheRead")}</p>
-                  <p className="text-lg font-black text-emerald-700 dark:text-emerald-300 font-mono">${model.cacheReadPrice}/M</p>
+                  <p className="text-sm font-black text-emerald-700 dark:text-emerald-300 font-mono">{formatMoney(model.cacheReadPrice)}/M</p>
                 </div>
               )}
             </div>
@@ -793,7 +795,7 @@ function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => voi
         </div>
       )}
 
-      {model.pricing?.imageInputPrice != null && <div className="rounded-xl border bg-muted/50 p-4 text-sm space-y-1"><p>图片按实际 Tokens 计费，不是固定每张价格。</p><p>文字输入 / 缓存：$ {model.inputPrice} / $ {model.cacheReadPrice}／百万 Tokens</p><p>图片输入 / 缓存 / 输出：$ {model.pricing.imageInputPrice} / $ {model.pricing.imageCacheReadPrice} / $ {model.outputPrice}／百万 Tokens</p></div>}
+      {model.pricing?.imageInputPrice != null && <div className="rounded-xl border bg-muted/50 p-4 text-sm space-y-1"><p>图片按实际 Tokens 计费，不是固定每张价格。</p><p>文字输入：{formatMoney(model.inputPrice)}／百万 Tokens；缓存：{formatMoney(model.cacheReadPrice)}</p><p>图片输入：{formatMoney(model.pricing.imageInputPrice)}；图片缓存：{formatMoney(model.pricing.imageCacheReadPrice)}；图片输出：{formatMoney(model.outputPrice)}／百万 Tokens</p></div>}
       {model.pricing?.longContext && <p className="text-sm text-muted-foreground">输入超过 {model.pricing.longContext.threshold.toLocaleString()} Tokens 时，整次请求输入与缓存价格 × {model.pricing.longContext.inputMultiplier}，输出价格 × {model.pricing.longContext.outputMultiplier}。</p>}
       <p className="text-xs text-muted-foreground">展示为基础单价，最终费用受套餐与渠道倍率影响；请求日志可查看计费快照。请使用 TokenSea 密钥，不是上游平台密钥。</p>
       {/* API example */}

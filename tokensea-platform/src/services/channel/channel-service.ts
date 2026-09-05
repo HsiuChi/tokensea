@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import { badRequest, notFound } from "../../lib/errors.js";
 import { encryptUpstreamSecret, maskUpstreamSecret, upstreamSecretFingerprint } from "../../lib/upstream-secret.js";
 import { KSYUN_MODELS } from "../../config/ksyun-model-catalog.js";
+import { preserveRetailPrice } from "../billing/trial-pricing.js";
 import { probeCpa, upstreamHeaders, upstreamUrl } from "./upstream-request.js";
 
 type NodeInput = {
@@ -138,6 +139,7 @@ export class ChannelService {
     }
 
     for (const [sortOrder, model] of models.entries()) {
+      const existingPrice = await this.prisma.modelAlias.findUnique({ where: { alias: model.id } });
       const alias = await this.prisma.modelAlias.upsert({
         where: { alias: model.id },
         update: {
@@ -147,6 +149,7 @@ export class ChannelService {
           maxContext: model.maxContext, supportsVision: model.supportsVision ?? false,
           supportsStream: model.supportsStream ?? true, supportsTools: model.supportsTools ?? true, status: "active",
           pricing: model.category === "video" ? Prisma.JsonNull : { currency: "USD", unit: "1M tokens", source: "KSP public pricing", cnyPerUsd, upstreamCny: { input: model.inputPrice, output: model.outputPrice, cacheRead: model.cacheReadPrice ?? 0 }, firstTier: true },
+          ...preserveRetailPrice(existingPrice),
         },
         create: {
           alias: model.id, displayName: model.displayName, provider: model.provider,

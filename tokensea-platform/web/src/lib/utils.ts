@@ -1,5 +1,7 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
+import { formatMoney } from "../../../src/shared/money"
+export { formatMoney, CNY_PER_USD } from "../../../src/shared/money"
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -9,9 +11,7 @@ export function formatQuota(microdollars: number | string | bigint): string {
   const n = typeof microdollars === "bigint" ? Number(microdollars) : Number(microdollars)
   if (n < 0) return "Unlimited"
   const usd = n / 1_000_000
-  if (usd >= 1) return `$${usd.toFixed(2)}`
-  if (usd >= 0.01) return `$${usd.toFixed(3)}`
-  return `$${usd.toFixed(6)}`
+  return formatMoney(usd)
 }
 
 export function formatNumber(n: number): string {

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { api } from "@/services/api"
 import { Button } from "@/components/ui/button"
+import {formatMoney} from '@/lib/utils'
 function initial(model:any) {
   if(model.category==="image")return {prompt:"海面上的帆船",size:"1024x1024",quality:"low",n:1}
   if(model.alias.startsWith("seedance"))return {content:[{type:"text",text:"海边日落"}],duration:5,resolution:"720p",ratio:"16:9"}
@@ -41,7 +42,7 @@ export function BillingEstimate({model}:{model:any}) {
     <Button size="sm" disabled={!key||busy} onClick={calculate}>{busy?"试算中…":"计算预占金额"}</Button>
     {error&&<p role="alert" className="text-sm text-red-500">{error}</p>}
     {quote&&<div className="space-y-1 text-sm">
-      <p>预计临时冻结：<strong className="text-blue-600 dark:text-blue-400">$ {Number(quote.estimatedUsd).toFixed(6)}</strong></p>
+      <p>预计临时冻结：<strong className="text-blue-600 dark:text-blue-400">{formatMoney(Number(quote.estimatedUsd))}</strong></p>
       <p className="text-xs text-muted-foreground">这不是最终扣费。完成后按实际用量或明确的视频档位结算，释放差额。自动尺寸/质量、参考图、长上下文可能扩大估算；异常用量需核对。</p>
       <p className="text-xs text-muted-foreground">含当前套餐及路由倍率；正式提交时重新校验。</p>
     </div>}

@@ -1,5 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { publicPricing } from '../services/billing/trial-pricing.js';
+import { CNY_PER_USD } from '../shared/money.js';
 
 export async function publicRoutes(app: FastifyInstance) {
 
@@ -190,7 +192,8 @@ export async function publicRoutes(app: FastifyInstance) {
     });
 
     return {
-      data: models,
+      data: models.map(m=>({...m,pricing:publicPricing(m.pricing)})),
+      currency:{primary:'CNY',ledger:'USD',cnyPerUsd:CNY_PER_USD,rateType:'fixed_platform_rate'},
       categories: categories.map((c) => c.category),
       providers: providers.map((p) => p.provider),
     };
@@ -207,6 +210,7 @@ export async function publicRoutes(app: FastifyInstance) {
 
     if (!model) return { data: null };
 
-    return { data: model };
+    const {routes,...safe}=model;
+    return { data: {...safe,pricing:publicPricing(model.pricing)} };
   });
 }

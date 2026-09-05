@@ -2,6 +2,8 @@ import type { PrismaClient } from "@prisma/client";
 import { notFound } from "../../lib/errors.js";
 import { errorExplanation, csvCell } from "./request-detail.js";
 import { timeRange, qualityStats } from "./statistics.js";
+import { publicBillingDetail } from '../billing/trial-pricing.js';
+import { CNY_PER_USD } from '../../shared/money.js';
 
 export class LogService {
   constructor(private prisma: PrismaClient) {}
@@ -25,7 +27,7 @@ export class LogService {
       this.prisma.requestLog.findMany({ where, orderBy: { startedAt: "desc" }, skip: (page - 1) * pageSize, take: pageSize }),
       this.prisma.requestLog.count({ where }),
     ]);
-    return { items, total, page, pageSize };
+    return { items:opts.userId?items.map(l=>({...l,pricingDetail:publicBillingDetail(l.pricingDetail)})):items, total, page, pageSize };
   }
 
   async getUsageStats(userId: bigint, period: string, startDate?: string, endDate?: string, filters?: { status?: string; requestedModel?: string }) {
@@ -113,7 +115,7 @@ export class LogService {
     const log = await this.prisma.requestLog.findFirst({ where: { requestId, userId } });
     if (!log) throw notFound("Request not found");
     const { nodeId, channelId, ...safe } = log;
-    return { ...safe, errorExplanation: errorExplanation(log), billingExplanation: log.pricingDetail
+    return { ...safe, pricingDetail:publicBillingDetail(log.pricingDetail), errorExplanation: errorExplanation(log), billingExplanation: log.pricingDetail
       ? "按请求发生时记录的 Token 用量 × 单价 × 倍率结算，金额四舍五入到 0.000001 美元；下方为当时的计费快照。"
       : log.billableUnits === 0n ? "此请求未扣费；没有保存计费快照。" : "历史记录缺少计费快照，不使用当前价格反推历史费用。" };
   }
@@ -124,8 +126,8 @@ export class LogService {
     if (opts.requestedModel) where.requestedModel = { contains: opts.requestedModel, mode: "insensitive" };
     const rows = await this.prisma.requestLog.findMany({ where, orderBy: [{ startedAt: "desc" }, { id: "desc" }], take: 10001 });
     const truncated = rows.length > 10000;
-    const header = ["请求 ID", "时间 UTC", "模型", "接口", "状态", "HTTP", "错误代码", "输入 Tokens", "输出 Tokens", "缓存读取", "缓存写入", "耗时 ms", "费用 USD", "计费快照"];
-    const csv = "\uFEFF" + [header, ...rows.slice(0,10000).map(l => [l.requestId, l.startedAt.toISOString(), l.requestedModel, l.endpoint, l.status, l.httpStatus, l.errorCode, l.inputTokens, l.outputTokens, l.cacheReadTokens, l.cacheCreationTokens, l.durationMs, (Number(l.billableUnits)/1e6).toFixed(6), JSON.stringify(l.pricingDetail)])].map(row => row.map(csvCell).join(",")).join("\r\n");
+    const header = ["请求 ID", "时间 UTC", "模型", "接口", "状态", "HTTP", "错误代码", "输入 Tokens", "输出 Tokens", "缓存读取", "缓存写入", "耗时 ms", "费用 USD", "费用 CNY（平台折算）", "CNY/USD", "计费快照"];
+    const csv = "\uFEFF" + [header, ...rows.slice(0,10000).map(l => {const fx=Number((l.pricingDetail as any)?.cnyPerUsd??CNY_PER_USD);return [l.requestId, l.startedAt.toISOString(), l.requestedModel, l.endpoint, l.status, l.httpStatus, l.errorCode, l.inputTokens, l.outputTokens, l.cacheReadTokens, l.cacheCreationTokens, l.durationMs, (Number(l.billableUnits)/1e6).toFixed(6),(Number(l.billableUnits)/1e6*fx).toFixed(6),fx, JSON.stringify(publicBillingDetail(l.pricingDetail))]})].map(row => row.map(csvCell).join(",")).join("\r\n");
     return { csv, count: Math.min(rows.length,10000), truncated, message: truncated ? "最多导出 10000 条，请缩小时间范围导出其余记录。" : "" };
   }
 

@@ -2,7 +2,8 @@ import { useEffect, useState } from "react"
 import { api } from "@/services/api"
 import { Button } from "@/components/ui/button"
 import { Card, CardHeader, CardContent, CardTitle } from "@/components/ui/card"
-const money=(v:any)=>v===null?"不限额":"$"+(Number(v)/1e6).toFixed(6)
+import {formatQuota} from '@/lib/utils'
+const money=(v:any)=>v===null?"不限额":formatQuota(v)
 export function BillingBalance({admin=false}:{admin?:boolean}) {
   const [data,setData]=useState<any>(null),[error,setError]=useState("")
   const refresh=async()=>{try{setData(await (admin?api.billingPending():api.billingSelf()));setError("")}catch(e:any){setError(e.message)}}

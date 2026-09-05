@@ -19,8 +19,8 @@ function duration(value: any, fallback: number, min: number, max: number) {
 }
 
 /** Prices are the actual KSP upstream rate card, not another provider's converted prices. */
-export function quoteVideo(model: string, body: any, cnyPerUsd: number, planMultiplier = 1, channelMultiplier = 1) {
-  if ([cnyPerUsd, planMultiplier, channelMultiplier].some(n => !Number.isFinite(n) || n < 0) || cnyPerUsd === 0) throw badRequest("Invalid video currency conversion or multiplier");
+export function quoteVideo(model: string, body: any, cnyPerUsd: number, planMultiplier = 1, channelMultiplier = 1, saleMultiplier = 1) {
+  if ([cnyPerUsd, planMultiplier, channelMultiplier, saleMultiplier].some(n => !Number.isFinite(n) || n < 0) || cnyPerUsd === 0) throw badRequest("Invalid video currency conversion or multiplier");
   let family: "seedance" | "kling" | "hailuo", path: string, upstreamBody: any;
   let baseCny: number, rateCny = 0, estimatedTokens = 0;
   let unit: "second" | "video" | "1M tokens", seconds: number;
@@ -62,12 +62,12 @@ export function quoteVideo(model: string, body: any, cnyPerUsd: number, planMult
     path = "v3/contents/generations/tasks";
     upstreamBody = { ...body, model, duration: seconds, resolution, ratio };
   } else throw badRequest("Video model has no verified billing adapter: " + model);
-  const estimatedUsd = Math.ceil(baseCny / cnyPerUsd * planMultiplier * channelMultiplier * 1e6) / 1e6;
+  const estimatedUsd = Math.ceil(baseCny / cnyPerUsd * planMultiplier * channelMultiplier * saleMultiplier * 1e6) / 1e6;
   if (!Number.isSafeInteger(Math.round(estimatedUsd * 1e6))) throw badRequest("Video estimate exceeds billing limits");
   return { amount: BigInt(Math.round(estimatedUsd * 1e6)), detail: {
     version: 1, kind: "video" as const, priceVersion: VIDEO_PRICE_VERSION, source: VIDEO_PRICE_SOURCE,
     currency: "USD", upstreamCurrency: "CNY", cnyPerUsd, model, family, path, unit, seconds, rateCny,
-    baseCny, estimatedTokens, estimatedUsd, planMultiplier, channelMultiplier, assumptions,
+    baseCny, estimatedTokens, estimatedUsd, planMultiplier, channelMultiplier, saleMultiplier, assumptions,
     parameters: { duration: seconds, resolution: upstreamBody.resolution, mode: upstreamBody.mode, sound: upstreamBody.sound },
   }, upstreamBody };
 }
@@ -78,10 +78,11 @@ export function videoSettlement(quote: any, usageTokens?: number) {
     if (!Number.isSafeInteger(usageTokens) || usageTokens! <= 0 || usageTokens! > 2147483647) throw badRequest("Missing or invalid final video usage; reservation retained");
     upstreamCny = usageTokens! / 1e6 * quote.rateCny;
   }
-  const usd = upstreamCny / quote.cnyPerUsd * quote.planMultiplier * quote.channelMultiplier;
+  const usd = upstreamCny / quote.cnyPerUsd * quote.planMultiplier * quote.channelMultiplier * (quote.saleMultiplier ?? 1);
   if (!Number.isFinite(usd) || usd < 0 || usd * 1e6 > Number.MAX_SAFE_INTEGER) throw badRequest("Invalid final video price");
   const billableUnits = BigInt(Math.round(usd * 1e6));
   return { billableUnits, detail: { ...quote, upstreamCny, videoTokens: usageTokens ?? null,
-    totalUsd: upstreamCny / quote.cnyPerUsd, billingMultiplier: quote.planMultiplier * quote.channelMultiplier,
+    totalUsd: upstreamCny / quote.cnyPerUsd, billingMultiplier: quote.planMultiplier * quote.channelMultiplier * (quote.saleMultiplier ?? 1),
+    costCny:Number(billableUnits)/1e6*quote.cnyPerUsd,internalCost:{estimated:true,kind:'upstream_video_rate_card',costUsd:upstreamCny/quote.cnyPerUsd,profitUsd:Number(billableUnits)/1e6-upstreamCny/quote.cnyPerUsd},
     costUsd: Number(billableUnits) / 1e6, actual: true } };
 }
