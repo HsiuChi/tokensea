@@ -13,6 +13,7 @@ import {
 } from "lucide-react"
 
 import { VendorIcon } from "@/components/VendorIcon"
+import { BillingEstimate } from "@/components/BillingEstimate"
 
 // ── Provider theme map ────────────────────────────────────────────
 interface ProviderTheme {
@@ -540,42 +541,26 @@ function getCurlExample(model: any) {
   }'`
   }
 
-  if (alias.startsWith("seedance")) {
-    return `curl https://api.tokensea.dev/v1/video/${alias}/v3/contents/generations/tasks \\
-  -H "Authorization: Bearer YOUR_TOKENSEA_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "${alias}",
-    "content": [{"type": "text", "text": "海边日落的电影感镜头"}],
-    "ratio": "16:9",
-    "duration": 5,
-    "generate_audio": true
-  }'`
+  if (alias === "seedance-2.0-o") return "# 此型号价格尚未核实，暂不开放计费调用。"
+  const seed = alias.startsWith("seedance"), kling = alias.startsWith("kling")
+  const path = seed ? "v3/contents/generations/tasks" : kling ? (alias.endsWith("omni") ? "v1/videos/omni-video" : "v1/videos/text2video") : "v1/video_generation"
+  const parameters = seed ? {
+    model:alias,content:[{type:"text",text:"海边日落的电影感镜头"}],ratio:"16:9",resolution:"720p",duration:5,generate_audio:true,
+  } : kling ? {
+    model_name:alias,prompt:"海边日落的电影感镜头",duration:"5",mode:"std",sound:"on",aspect_ratio:"16:9",
+  } : {
+    model:alias,prompt:"海边日落的电影感镜头",duration:6,resolution:"768P",
+    ...(alias.endsWith("fast") ? {first_frame_image:"https://example.com/REPLACE_WITH_YOUR_IMAGE.png"} : {}),
   }
-
-  if (alias.startsWith("kling")) {
-    return `curl https://api.tokensea.dev/v1/video/${alias}/v1/videos/text2video \\
-  -H "Authorization: Bearer YOUR_TOKENSEA_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model_name": "${alias}",
-    "prompt": "海边日落的电影感镜头",
-    "duration": "5",
-    "mode": "std",
-    "sound": "on",
-    "aspect_ratio": "16:9"
-  }'`
-  }
-
-  return `curl https://api.tokensea.dev/v1/video/${alias}/v1/video_generation \\
-  -H "Authorization: Bearer YOUR_TOKENSEA_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "${alias}",
-    "prompt": "海边日落的电影感镜头",
-    "duration": 6,
-    "resolution": "768P"
-  }'`
+  return '# 同一次任务重试须复用 Idempotency-Key；新任务请换一个唯一值。\n'
+    + 'curl https://api.tokensea.dev/v1/video/' + alias + '/' + path + ' \\\n'
+    + '  -H "Authorization: Bearer $TOKENSEA_API_KEY" \\\n'
+    + '  -H "Idempotency-Key: YOUR_UNIQUE_REQUEST_ID" \\\n'
+    + '  -H "Content-Type: application/json" \\\n'
+    + "  -d '" + JSON.stringify(parameters,null,2) + "'\n\n"
+    + '# 使用返回的 TokenSea id 查询；不要使用上游 task_id。查询不重复计费。\n'
+    + 'curl https://api.tokensea.dev/v1/video/' + alias + '/tasks/YOUR_TOKENSEA_TASK_ID \\\n'
+    + '  -H "Authorization: Bearer $TOKENSEA_API_KEY"'
 }
 
 function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => void }) {
@@ -691,10 +676,12 @@ function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => voi
         </div>}
       </div>
 
+      <BillingEstimate key={model.alias} model={model} />
       {/* Pricing — $/M tokens */}
       {isVideo ? (
         <div className="rounded-2xl border border-fuchsia-100 bg-fuchsia-50/70 p-4 text-sm font-semibold text-fuchsia-700 dark:border-fuchsia-900/60 dark:bg-fuchsia-500/10 dark:text-fuchsia-300">
-          {t("marketplace.videoBillingDetail")}
+          <p>可灵按时长与音画档位，海螺按分辨率和时长档位，Seedance 按实际视频 Tokens 结算。提交前预占，完成后结算；查询任务不重复收费。</p>
+          <p className="mt-2">当前仅接受已核实的参数组合。Seedance 2.0-o、视频参考输入及其他未核价扩展参数暂不开放计费调用。</p>
         </div>
       ) : <div>
         <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">{t("marketplace.pricing")}</p>

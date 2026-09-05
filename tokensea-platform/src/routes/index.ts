@@ -1,3 +1,4 @@
+import { billingRoutes } from "./billing.js";
 import type { FastifyInstance } from "fastify";
 import { authRoutes } from "./auth.js";
 import { tokenRoutes } from "./token.js";
@@ -17,6 +18,7 @@ import { sensitiveRoutes } from "./sensitive.js";
 import { webhookRoutes } from "./webhook.js";
 
 export async function registerRoutes(app: FastifyInstance) {
+  await app.register(billingRoutes, {prefix:"/api/billing"});
   // Health check
   app.get("/api/health", async () => ({ status: "ok", timestamp: new Date().toISOString() }));
 

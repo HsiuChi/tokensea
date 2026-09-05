@@ -1,3 +1,4 @@
+import { BillingBalance } from "@/components/BillingBalance";
 import { useEffect, useState, useCallback } from "react"
 import { useTranslation } from "react-i18next"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -145,6 +146,7 @@ export function LogsPage() {
 
   return (
     <div className="space-y-6">
+      <BillingBalance />
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold tracking-tight">{t("logs.title", { defaultValue: "Request Logs" })}</h1>
@@ -335,8 +337,15 @@ export function LogsPage() {
             <div className="grid grid-cols-2 gap-3 rounded-xl bg-muted p-4"><span>输入：{detail.inputTokens}</span><span>输出：{detail.outputTokens}</span><span>缓存读取：{detail.cacheReadTokens}</span><span>缓存写入：{detail.cacheCreationTokens}</span><span>耗时：{detail.durationMs ?? "—"} ms</span><span>扣费：$ {(Number(detail.billableUnits)/1e6).toFixed(6)}</span></div>
             <p className="text-muted-foreground">{detail.billingExplanation}</p>
             {detail.pricingDetail && <div className="space-y-2">
-              <p>输入 / 输出单价：$ {detail.pricingDetail.inputPrice} / $ {detail.pricingDetail.outputPrice}（每百万 Tokens）</p>
-              <p>缓存读取 / 写入单价：$ {detail.pricingDetail.cacheReadPrice} / $ {detail.pricingDetail.cacheWrite5mPrice}</p>
+              {detail.pricingDetail.kind === "video" ? <>
+                <p>视频计费：{detail.pricingDetail.unit === "second" ? "按秒" : detail.pricingDetail.unit === "video" ? "按视频档位" : "按视频 Tokens"} · 时长 {detail.pricingDetail.seconds} 秒</p>
+                <p>基础费用：¥ {detail.pricingDetail.upstreamCny} · 折算汇率：{detail.pricingDetail.cnyPerUsd} CNY/USD</p>
+                {detail.pricingDetail.videoTokens != null && <p>实际视频用量：{detail.pricingDetail.videoTokens} Tokens</p>}
+              </> : <>
+                <p>输入 / 输出单价：$ {detail.pricingDetail.inputPrice} / $ {detail.pricingDetail.outputPrice}（每百万 Tokens）</p>
+                <p>缓存读取 / 写入单价：$ {detail.pricingDetail.cacheReadPrice} / $ {detail.pricingDetail.cacheWrite5mPrice}</p>
+              </>}
+              {detail.pricingDetail.reservedUsd != null && <p>提交时预占：$ {detail.pricingDetail.reservedUsd} · 最终扣费：$ {detail.pricingDetail.costUsd}（预占不重复扣除）</p>}
               <p>套餐倍率：{detail.pricingDetail.planMultiplier ?? "未记录"} · 渠道倍率：{detail.pricingDetail.channelMultiplier ?? "未记录"} · 总倍率：{detail.pricingDetail.billingMultiplier}</p>
               {detail.pricingDetail.longContext && <p>此请求适用长上下文价格。</p>}
               <details><summary className="cursor-pointer text-primary">完整计费快照（含图片用量）</summary><pre className="mt-2 overflow-auto rounded-xl bg-muted p-3 text-xs">{JSON.stringify(detail.pricingDetail,null,2)}</pre></details>

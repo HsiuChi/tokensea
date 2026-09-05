@@ -1,0 +1,8 @@
+{
+  email admin@tokensea.dev
+}
+
+tokensea.dev, api.tokensea.dev, www.tokensea.dev, xuexin.xyz, http://47.236.57.75 {
+  header Retry-After "120"
+  respond "TokenSea is undergoing a brief billing upgrade. Please retry shortly." 503
+}

@@ -18,6 +18,10 @@ async function request<T>(path: string, options?: RequestInit, raw?: boolean): P
 }
 
 export const api = {
+  billingEstimate: (apiKeyId:string,model:string,parameters:any) => request<any>("/api/billing/estimate",{method:"POST",body:JSON.stringify({apiKeyId,model,parameters})}),
+  billingReview: (id:string,action:"retry"|"release",reason:string) => request<any>("/api/billing/review/"+id,{method:"POST",body:JSON.stringify({action,reason})}),
+  billingSelf: () => request<any>("/api/billing/self"),
+  billingPending: () => request<any[]>("/api/billing/pending"),
   // Auth
   register: (body: { username: string; password: string; email?: string; inviteCode?: string }) =>
     request<{ user: any; token: string }>("/api/auth/register", { method: "POST", body: JSON.stringify(body) }),

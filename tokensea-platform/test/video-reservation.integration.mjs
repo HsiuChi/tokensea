@@ -1,0 +1,104 @@
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {PrismaClient} from '@prisma/client';
+import {VideoTaskService} from '../src/services/billing/video-task-service.ts';
+import {ReservationService} from '../src/services/billing/reservation-service.ts';
+if(!process.env.DATABASE_URL?.includes('/billing_test')) throw Error('Only isolated billing_test database permitted');
+const p=new PrismaClient(),tag=randomUUID().slice(0,8),billing=new ReservationService(p),tasks=new VideoTaskService(p);
+const user=await p.user.create({data:{username:'video_'+tag,passwordHash:'fixture',inviteCode:tag,quota:100000000n}});
+const group=await p.keyGroup.create({data:{userId:user.id,name:'video',quota:100000000n}});
+const key=await p.apiKey.create({data:{userId:user.id,keyGroupId:group.id,name:'video',keyHash:randomUUID(),keyPrefix:'test'}});
+const channel=await p.channel.create({data:{name:'video_'+tag,type:'custom',models:[]}});
+const node=await p.channelNode.create({data:{channelId:channel.id,name:'original',internalUrl:'https://upstream.example',internalApiKey:'fixture-only',adapter:'ksyun'}});
+const otherNode=await p.channelNode.create({data:{channelId:channel.id,name:'other',internalUrl:'https://other.example',internalApiKey:'fixture-only',adapter:'ksyun'}});
+const alias={alias:'kling-v3',category:'video',inputPrice:0,outputPrice:0,cacheReadPrice:0,cacheWrite5mPrice:0,pricing:{cnyPerUsd:7.2}};
+const body={prompt:'sea',duration:5,mode:'std',sound:'on'};
+const originalFetch=globalThis.fetch;
+let posts=0,gets=0,outcome='succeed';
+globalThis.fetch=async(url,init)=>{
+  assert(String(url).startsWith('https://upstream.example/'),'poll must remain on original node');
+  if(init.method==='POST'){posts++;return Response.json({code:0,data:{task_id:'upstream-task',task_status:'submitted'}});}
+  gets++;return Response.json({code:0,data:{task_id:'upstream-task',task_status:outcome,task_result:{videos:[{duration:'5.041',url:'https://media.example/video.mp4'}]}}});
+};
+const ready=async id=>{
+  const r=await p.billingReservation.findUniqueOrThrow({where:{requestId:id}});
+  r.payload.videoJob.nextPollAt='2020-01-01T00:00:00Z';
+  await p.billingReservation.update({where:{requestId:id},data:{payload:r.payload}});
+};
+try {
+  const id=randomUUID();
+  await Promise.all(Array.from({length:8},()=>tasks.submit(id,key.id,alias,body,node,1.5,alias.alias,'v1/videos/text2video')));
+  assert.equal(posts,1,'concurrent idempotency must dispatch once');
+  await tasks.submit(id,key.id,alias,body,otherNode,1.5,alias.alias,'v1/videos/text2video');
+  assert.equal(posts,1,'retry using another selected node does not create another task');
+  await assert.rejects(tasks.submit(id,key.id,alias,{...body,duration:10},node,1.5,alias.alias,'v1/videos/text2video'),/different/);
+  await assert.rejects(tasks.get(user.id+999999n,alias.alias,id),/not found/);
+  const hold=await p.billingReservation.findUniqueOrThrow({where:{requestId:id}});
+  assert.equal(hold.amount,937500n);
+  await p.billingReservation.update({where:{requestId:id},data:{createdAt:new Date(Date.now()-30*60*1000)}});
+  await billing.recover();assert.equal((await tasks.get(user.id,alias.alias,id)).billing.status,'reserved','active async job survives ordinary stale-hold timeout');
+  await ready(id);await new VideoTaskService(p).recover();await tasks.recover();
+  assert.equal(await p.usageLedger.count({where:{requestId:id}}),1);
+  assert.equal((await tasks.get(user.id,alias.alias,id)).billing.chargedUsd,0.9375);
+  assert.equal((await p.keyGroup.findUniqueOrThrow({where:{id:group.id}})).usedQuota,937500n);
+  for(let i=0;i<8;i++)await tasks.get(user.id,alias.alias,id);
+  assert.equal(gets,1,'user polling is cached and does not charge or issue extra upstream requests');
+  assert((await billing.reconcile(user.id)).balanced);
+  outcome='failed';const failed=randomUUID();
+  await tasks.submit(failed,key.id,alias,body,node,1.5,alias.alias,'v1/videos/text2video');
+  await ready(failed);await tasks.recover();
+  assert.equal((await tasks.get(user.id,alias.alias,failed)).billing.status,'released');
+  const durationMismatch=randomUUID();
+  globalThis.fetch=async(url,init)=>init.method==='POST'
+    ?Response.json({code:0,data:{task_id:'duration-task',task_status:'submitted'}})
+    :Response.json({code:0,data:{task_id:'duration-task',task_status:'succeed',task_result:{videos:[{duration:'6',url:'https://media.example/video.mp4'}]}}});
+  await tasks.submit(durationMismatch,key.id,alias,body,node,1.5,alias.alias,'v1/videos/text2video');
+  await ready(durationMismatch);await tasks.recover();
+  assert.equal((await tasks.get(user.id,alias.alias,durationMismatch)).billing.status,'review','one-second excess is not tail-frame rounding');
+  await billing.resolveReview(durationMismatch,'release','Fixture-only duration discrepancy waived',user.id);
+  const hailuo={...alias,alias:'hailuo-02'},hailuoBody={prompt:'sea',duration:6,resolution:'768P'};
+  const rejected=randomUUID();
+  globalThis.fetch=async()=>Response.json({task_id:'',base_resp:{status_code:2013,status_msg:'invalid params'}});
+  await tasks.submit(rejected,key.id,hailuo,hailuoBody,node,1,hailuo.alias,'v1/video_generation');
+  assert.equal((await tasks.get(user.id,hailuo.alias,rejected)).billing.status,'released','HTTP 200 business rejection must not retain a hold');
+  const hailuoId=randomUUID();
+  globalThis.fetch=async(url,init)=>{
+    assert(String(url).startsWith('https://upstream.example/'));
+    if(init.method==='POST')return Response.json({task_id:'hail-task',base_resp:{status_code:0}});
+    if(String(url).includes('/v1/files/retrieve?file_id=hail-file'))return Response.json({file:{download_url:'https://media.example/hail.mp4'}});
+    return Response.json({task_id:'hail-task',status:'Success',file_id:'hail-file',video_width:1366,video_height:768,base_resp:{status_code:0}});
+  };
+  await tasks.submit(hailuoId,key.id,hailuo,hailuoBody,node,1,hailuo.alias,'v1/video_generation');
+  await ready(hailuoId);await tasks.recover();
+  const hailuoResult=await tasks.get(user.id,hailuo.alias,hailuoId);
+  assert.equal(hailuoResult.billing.status,'settled');assert.equal(hailuoResult.billing.chargedUsd,0.277778);
+  assert.equal(hailuoResult.result.download_url,'https://media.example/hail.mp4');
+  const unknown=randomUUID();globalThis.fetch=async()=>{throw Error('network disconnected')};
+  await tasks.submit(unknown,key.id,alias,body,node,1.5,alias.alias,'v1/videos/text2video');
+  assert.equal((await tasks.get(user.id,alias.alias,unknown)).billing.status,'review');
+  await assert.rejects(billing.resolveReview(unknown,'retry','No response saved; cannot replay',user.id),/No saved/);
+  await billing.resolveReview(unknown,'release','Fixture provider confirms no charge',user.id);
+  const seed={...alias,alias:'seedance-2.0-domestic'},seedBody={content:[{type:'text',text:'sea'}],duration:4,resolution:'480p'};
+  const seedId=randomUUID();
+  // Replay the live KSP usage shape and quantity captured on 2026-09-05.
+  globalThis.fetch=async(url,init)=>init.method==='POST'?Response.json({id:'seed-task',status:'queued'}):Response.json({id:'seed-task',status:'succeeded',usage:{completion_tokens:40594,total_tokens:40594},content:{video_url:'https://media.example/s.mp4'}});
+  await tasks.submit(seedId,key.id,seed,seedBody,node,1,seed.alias,'v3/contents/generations/tasks');
+  await ready(seedId);await tasks.recover();
+  const seedRow=await p.billingReservation.findUniqueOrThrow({where:{requestId:seedId}});
+  assert.equal(seedRow.charged,259351n);assert(seedRow.charged<seedRow.amount);
+  const missing=randomUUID();
+  globalThis.fetch=async(url,init)=>init.method==='POST'?Response.json({id:'seed-task',status:'queued'}):Response.json({id:'seed-task',status:'succeeded',usage:{total_token:0}});
+  await tasks.submit(missing,key.id,seed,seedBody,node,1,seed.alias,'v3/contents/generations/tasks');
+  await ready(missing);await tasks.recover();
+  assert.equal((await tasks.get(user.id,seed.alias,missing)).billing.status,'review','zero documented example is not free video');
+  assert((await billing.reconcile(user.id)).balanced);
+  console.log('PASS: async dispatch idempotency, original-key polling, ownership, restart recovery, fixed/token video settlement, failure release, unknown submission/usage retention');
+} finally {
+  globalThis.fetch=originalFetch;
+  await p.billingReservation.deleteMany({where:{userId:user.id}});
+  await p.billingBaseline.deleteMany({where:{OR:[{scope:'user',accountId:user.id},{scope:'key',accountId:key.id},{scope:'group',accountId:group.id}]}});
+  await p.requestLog.deleteMany({where:{userId:user.id}});await p.usageLedger.deleteMany({where:{userId:user.id}});
+  await p.apiKey.delete({where:{id:key.id}});await p.keyGroup.delete({where:{id:group.id}});
+  await p.auditLog.deleteMany({where:{actorId:user.id}});await p.user.delete({where:{id:user.id}});
+  await p.channelNode.deleteMany({where:{channelId:channel.id}});await p.channel.delete({where:{id:channel.id}});await p.$disconnect();
+}

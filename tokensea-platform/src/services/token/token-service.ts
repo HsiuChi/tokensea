@@ -15,7 +15,7 @@ export class TokenService {
 
     const [items, total] = await Promise.all([
       this.prisma.apiKey.findMany({
-        where: { userId },
+        where: { userId, deletedAt: null },
         orderBy: { createdAt: "desc" },
         skip,
         take: pageSize,
@@ -40,7 +40,7 @@ export class TokenService {
           updatedAt: true,
         },
       }),
-      this.prisma.apiKey.count({ where: { userId } }),
+      this.prisma.apiKey.count({ where: { userId, deletedAt: null } }),
     ]);
 
     return { items, total, page, pageSize };
@@ -106,7 +106,7 @@ export class TokenService {
     allowedIps?: string[] | null;
   }) {
     const existing = await this.prisma.apiKey.findFirst({
-      where: { id: apiKeyId, userId },
+      where: { id: apiKeyId, userId, deletedAt: null },
     });
     if (!existing) throw notFound("API key not found");
 
@@ -135,11 +135,7 @@ export class TokenService {
     });
     if (!existing) throw notFound("API key not found");
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.requestLog.deleteMany({ where: { apiKeyId } });
-      await tx.usageLedger.deleteMany({ where: { apiKeyId } });
-      await tx.apiKey.delete({ where: { id: apiKeyId } });
-    });
+    await this.prisma.apiKey.update({where:{id:apiKeyId},data:{status:"disabled",deletedAt:new Date(),keyPlain:null}});
   }
 
   async findByKeyHash(keyHash: string) {

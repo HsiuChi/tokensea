@@ -149,6 +149,7 @@ model User {
   usageLedgers    UsageLedger[]
   topUpOrders     TopUpOrder[]
   subscriptionOrders SubscriptionOrder[]
+  billingReservations BillingReservation[]
 
   @@index([invitedBy])
   @@index([createdBy])
@@ -209,6 +210,8 @@ model UserPlanBinding {
 }
 
 model ApiKey {
+  billingReservations BillingReservation[]
+  deletedAt       DateTime?
   id              BigInt       @id @default(autoincrement())
   userId          BigInt
   keyGroupId      BigInt?
@@ -243,7 +246,40 @@ model ApiKey {
   @@map("api_keys")
 }
 
+// Durable money holds. Never automatically release an ambiguous upstream request.
+model BillingReservation {
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Restrict)
+  keyGroup KeyGroup? @relation(fields: [keyGroupId], references: [id], onDelete: Restrict)
+  requestId String @id @db.VarChar(36)
+  userId BigInt
+  apiKeyId BigInt
+  keyGroupId BigInt?
+  amount BigInt
+  charged BigInt @default(0)
+  status String @default("reserved") @db.VarChar(20)
+  pricing Json
+  payload Json?
+  reason String? @db.VarChar(128)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([userId, status])
+  @@index([apiKeyId, status])
+  @@index([keyGroupId, status])
+  @@map("billing_reservations")
+}
+
+model BillingBaseline {
+  scope String @db.VarChar(10)
+  accountId BigInt
+  openingUsed BigInt
+  createdAt DateTime @default(now())
+  @@id([scope, accountId])
+  @@map("billing_baselines")
+}
+
 model KeyGroup {
+  billingReservations BillingReservation[]
   id              BigInt       @id @default(autoincrement())
   name            String       @unique @db.VarChar(64)
   userId          BigInt

@@ -83,6 +83,7 @@ test("fragment-safe SSE parser recognizes cumulative Responses usage",()=>{
 test("native image route preserves requested model and records modality usage", async()=>{
   const service = new RelayService({}, {});
   service.resolveApiKey = async()=>({id:1n,userId:1n,user:{status:"active"},models:[]});
+  service.reserveQuota = async()=>{};
   service.checkQuota = async()=>{};service.checkRateLimit = async()=>{};
   service.resolveRoute = async()=>({alias:{},routes:[{channelId:2n,upstreamModel:"gpt-image-2"}]});
   service.resolveChannels = async()=>[{id:2n,billingMultiplier:1}];

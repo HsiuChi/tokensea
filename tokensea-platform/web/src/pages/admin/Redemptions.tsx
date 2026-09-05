@@ -168,7 +168,7 @@ export function AdminRedemptions() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowBatch(false)}>{t("common.cancel")}</Button>
-            <Button onClick={handleBatchCreate}>{t("admin.redemptions.createCount", { count: batchForm.count })}</Button>
+            <Button onClick={handleBatchCreate}>{t("admin.redemptions.createCount", { count: Number(batchForm.count) || 0 })}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

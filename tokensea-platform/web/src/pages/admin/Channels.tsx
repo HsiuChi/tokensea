@@ -1,3 +1,4 @@
+import { BillingBalance } from "@/components/BillingBalance";
 import { useEffect, useState, useCallback } from "react"
 import { useTranslation } from "react-i18next"
 import { ChannelOperations } from "@/components/ChannelOperations"
@@ -218,6 +219,7 @@ export function AdminChannels() {
 
   return (
     <div className="space-y-6">
+      <BillingBalance admin />
       <ChannelOperations />
       <div className="flex items-center justify-between">
         <div>

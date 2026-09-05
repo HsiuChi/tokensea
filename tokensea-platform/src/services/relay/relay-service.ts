@@ -1,6 +1,9 @@
 import type { FastifyRequest, FastifyReply } from "fastify";
 import type { PrismaClient, ApiKey, Plan, ChannelNode } from "@prisma/client";
 import type Redis from "ioredis";
+import { ReservationService } from "../billing/reservation-service.js";
+import { SettlementError } from "../billing/settlement-error.js";
+import { VideoTaskService } from "../billing/video-task-service.js";
 import { safeErrorCode } from "../log/request-detail.js";
 import { dispatchWebhookEvent } from "../notify/webhook-service.js";
 import { calculateTokenPrice, openAiUsage, type TokenUsage } from "../billing/token-pricing.js";
@@ -10,11 +13,12 @@ import { verifyToken } from "../../lib/jwt.js";
 import { redisKeys } from "../../lib/redis-keys.js";
 import { unauthorized, forbidden, rateLimited, internalError, badRequest } from "../../lib/errors.js";
 import { SensitiveWordService } from "../sensitive/sensitive-service.js";
-import { v4 as uuid } from "uuid";
+import { v4 as uuid, v5 as uuidV5 } from "uuid";
 import { selectChannel, channelsWithHealthyNodes } from "./channel-selection.js";
 import { upstreamHeaders, upstreamUrl as joinUpstreamUrl } from "../channel/upstream-request.js";
 
 interface RelayContext {
+  upstreamAccepted?: boolean;
   requestId: string;
   apiKey: ApiKey & { user: any; plan: any };
   model: string;
@@ -118,6 +122,13 @@ export class RelayService {
     let lastError: any;
     let lastContext: RelayContext | undefined;
 
+    await this.reserveQuota(requestId, apiKey.id, alias, body, Object.fromEntries(channels
+      .filter(c=>healthyChannelIds.has(c.id.toString())).map(c=>[c.id.toString(),c.billingMultiplier??1])));
+    // Bound otherwise-unbounded generation to the budget reserved above.
+    if (!body.max_tokens && !body.max_completion_tokens && !body.max_output_tokens) {
+      if (request.url.startsWith("/v1/responses")) body.max_output_tokens=4096;
+      else body.max_tokens=4096;
+    }
     const maxAttempts = Math.min(Math.max(allNodes.length, 1), MAX_UPSTREAM_ATTEMPTS);
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const channel = selectChannel(channels, healthyChannelIds, triedChannelIds);
@@ -186,13 +197,23 @@ export class RelayService {
         }
         return; // Success — exit failover loop
       } catch (err: any) {
+        if (err instanceof SettlementError) throw err;
+        if (ctx.upstreamAccepted) {
+          await this.holdAcceptedResult(ctx);
+        }
+        const reservation=await this.prisma.billingReservation.findUnique({where:{requestId}});
+        if(reservation && reservation.status !== "reserved") throw err; // Never replay an upstream request after result persistence.
+        if (!err.upstreamRejected) {
+          await this.settle(ctx, openAiUsage(), "failed", 502, "transport_unknown");
+          throw internalError("Upstream outcome unknown; request retained for review");
+        }
         lastError = err;
         const upStatus = err?.statusCode ?? 502;
         // Resolve retry action: channel.retryPolicy overrides default 429/503-continue.
         const action = this.resolveRetryAction(channel.retryPolicy, upStatus, err?.code);
         if (action === "stop" || action === "stop-and-cooldown") {
           request.log.error({ err, requestId, action }, "Upstream request failed (retryPolicy stop)");
-          await this.settle(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", upStatus, err.code);
+          await this.settle(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", upStatus, err.code ?? "transport_unknown");
           if (action === "stop-and-cooldown") {
             await this.redis.set(redisKeys.nodeCooldown(node.id), "1", "EX", 60);
           }
@@ -201,7 +222,7 @@ export class RelayService {
         const shouldContinue = action ? action.startsWith("continue") : (upStatus === 429 || upStatus === 503);
         if (!shouldContinue) {
           request.log.error({ err, requestId }, "Upstream request failed");
-          await this.settle(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", upStatus, err.code);
+          await this.settle(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", upStatus, err.code ?? "transport_unknown");
           throw internalError("Upstream request failed");
         }
         // continue (with optional cooldown)
@@ -217,7 +238,7 @@ export class RelayService {
     }
 
     // All attempts exhausted: retain the final failure in the request statistics.
-    if(lastContext) await this.settle(lastContext, openAiUsage(), "failed", lastError?.statusCode ?? 502, lastError?.code ?? "upstream_exhausted");
+    if(lastContext) await this.settle(lastContext, openAiUsage(), "failed", lastError?.statusCode ?? 502, lastError?.code ?? "transport_unknown");
     throw internalError("All upstream nodes exhausted");
   }
 
@@ -227,112 +248,36 @@ export class RelayService {
    * TokenSea key: /v1/video/:model/<provider-path>.
    */
   async handleMediaRequest(request: FastifyRequest, reply: FastifyReply) {
-    const startedAt = new Date();
-    const requestId = uuid();
     const apiKey = await this.resolveApiKey(request);
-
-    if (apiKey.expiresAt && apiKey.expiresAt < startedAt) throw unauthorized("API key expired");
-    if (apiKey.user.status === "disabled") throw forbidden("Account is disabled");
-
-    const params = request.params as { model?: string; "*"?: string };
-    const requestedModel = params.model;
-    if (!requestedModel) throw badRequest("Model is required");
-
-    const keyModels = apiKey.models as string[] | null;
-    const groupModels = apiKey.keyGroup?.models as string[] | null;
-    const effectiveModels = keyModels?.length ? keyModels : (groupModels?.length ? groupModels : null);
-    if ((groupModels?.length && !groupModels.includes(requestedModel)) || (effectiveModels && !effectiveModels.includes(requestedModel))) {
-      throw forbidden(`Model ${requestedModel} not allowed on this key`);
+    if (apiKey.expiresAt && apiKey.expiresAt <= new Date()) throw unauthorized("API key expired");
+    if (apiKey.user.status !== "active") throw forbidden("Account is disabled");
+    const params = request.params as { model: string; "*": string };
+    const model = params.model, suffix = params["*"];
+    const tasks = new VideoTaskService(this.prisma);
+    if (request.method === "GET") {
+      // Polling is wallet-independent and owner-scoped, never forwarded to a random shared key.
+      const match = /^tasks\/([a-f0-9-]{36})$/.exec(suffix);
+      if (!match) throw badRequest("Use the TokenSea pollUrl returned by video submission");
+      return reply.send(await tasks.get(apiKey.userId,model,match[1]));
     }
-
-    await this.checkQuota(apiKey);
-    await this.checkRateLimit(apiKey.userId, apiKey.plan);
-
-    const body = (request.body ?? {}) as Record<string, any>;
-    const contentText = this.extractContentText(body);
-    if (contentText) {
-      const sensitiveService = new SensitiveWordService(this.prisma, this.redis);
-      const check = await sensitiveService.checkContent(contentText);
-      if (check.blocked) throw badRequest("Content contains prohibited content");
-    }
-
-    const { routes } = await this.resolveRoute(requestedModel);
+    const keyModels = apiKey.models as string[] | null, groupModels = apiKey.keyGroup?.models as string[] | null;
+    if ((keyModels?.length && !keyModels.includes(model)) || (groupModels?.length && !groupModels.includes(model))) throw forbidden("Model not allowed on this key");
+    await this.checkRateLimit(apiKey.userId,apiKey.plan);
+    const body = (request.body ?? {}) as Record<string,any>;
+    const text = this.extractContentText(body);
+    if (text && (await new SensitiveWordService(this.prisma,this.redis).checkContent(text)).blocked) throw badRequest("Content contains prohibited content");
+    const {alias,routes} = await this.resolveRoute(model);
+    if (alias.category !== "video") throw badRequest("Not a video model");
     const channels = await this.resolveChannels(routes);
-    const allNodes = await this.getHealthyNodesForChannels(channels.map((channel) => channel.id));
-    if (allNodes.length === 0) throw internalError("No available upstream nodes");
-
-    const suffix = params["*"] ?? "";
-    const queryIndex = request.url.indexOf("?");
-    const queryString = queryIndex >= 0 ? request.url.slice(queryIndex) : "";
-    const triedNodeIds = new Set<string>();
-    let lastError: any;
-
-    for (let attempt = 0; attempt < Math.min(allNodes.length, MAX_UPSTREAM_ATTEMPTS); attempt++) {
-      const node = this.selectNodeFromPool(allNodes, triedNodeIds);
-      if (!node) break;
-      triedNodeIds.add(node.id.toString());
-
-      const channel = channels.find((item) => item.id === node.channelId);
-      const upstreamModel = routes.find((route: any) => route.channelId === node.channelId)?.upstreamModel ?? requestedModel;
-      const upstreamPath = `/${upstreamModel}/${suffix}${queryString}`;
-      const endpoint = `/v1/video/${requestedModel}/${suffix}`;
-      const ctx: RelayContext = {
-        requestId,
-        apiKey: apiKey as any,
-        model: requestedModel,
-        upstreamModel,
-        channelId: node.channelId,
-        channelBillingMultiplier: channel?.billingMultiplier ?? 1,
-        nodeId: node.id,
-        nodeUrl: node.internalUrl,
-        nodeApiKey: node.internalApiKey,
-        startedAt,
-        protocol: "openai",
-        endpoint,
-      };
-
-      const headers: Record<string, string> = {};
-      for (const [key, value] of Object.entries(request.headers)) {
-        if (typeof value !== "string") continue;
-        const lower = key.toLowerCase();
-        if (["host", "connection", "transfer-encoding", "content-length", "accept-encoding", "authorization", "x-api-key"].includes(lower)) continue;
-        headers[key] = value;
-      }
-      Object.assign(headers, upstreamHeaders(node, upstreamPath));
-      headers["x-request-id"] = requestId;
-
-      const upstreamBody = { ...body };
-      if (Object.prototype.hasOwnProperty.call(upstreamBody, "model")) upstreamBody.model = upstreamModel;
-      if (Object.prototype.hasOwnProperty.call(upstreamBody, "model_name")) upstreamBody.model_name = upstreamModel;
-
-      try {
-        const method = request.method.toUpperCase();
-        const response = await fetch(joinUpstreamUrl(node.internalUrl, upstreamPath), {
-          method,
-          headers,
-          body: method === "GET" || method === "HEAD" ? undefined : JSON.stringify(upstreamBody),
-        });
-        const payload = Buffer.from(await response.arrayBuffer());
-
-        if (!response.ok && RETRYABLE_UPSTREAM_STATUSES.has(response.status)) {
-          lastError = new Error(payload.toString("utf8"));
-          lastError.statusCode = response.status;
-          await this.redis.set(redisKeys.nodeCooldown(node.id), "1", "EX", 60);
-          continue;
-        }
-
-        await this.settle(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, response.ok ? "succeeded" : "failed", response.status);
-        const contentType = response.headers.get("content-type");
-        if (contentType) reply.header("content-type", contentType);
-        reply.code(response.status).send(payload);
-        return;
-      } catch (error: any) {
-        lastError = error;
-        await this.redis.set(redisKeys.nodeCooldown(node.id), "1", "EX", 60);
-      }
-    }
-
-    throw internalError(lastError?.message ?? "All upstream nodes exhausted");
+    const nodes = await this.getHealthyNodesForChannels(channels.map(c=>c.id));
+    const node = this.selectNodeFromPool(nodes,new Set());
+    if (!node) throw internalError("No available upstream nodes");
+    const idempotency = request.headers["idempotency-key"];
+    if (idempotency !== undefined && (typeof idempotency !== "string" || !/^[a-zA-Z0-9_-]{8,128}$/.test(idempotency))) throw badRequest("Idempotency-Key must be 8-128 letters, digits, underscores or hyphens");
+    const id = typeof idempotency === "string" ? uuidV5(apiKey.id.toString()+":"+idempotency,uuidV5.URL) : uuid();
+    const upstreamModel = routes.find(r=>r.channelId===node.channelId)?.upstreamModel ?? model;
+    const result = await tasks.submit(id,apiKey.id,alias,body,node,channels.find(c=>c.id===node.channelId)?.billingMultiplier??1,upstreamModel,suffix);
+    return reply.code(202).send(result);
   }
 
   private async handleNonStreamRequest(
@@ -347,12 +292,14 @@ export class RelayService {
       method: "POST",
       headers,
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(600000),
     });
 
     if (!response.ok) {
       if (RETRYABLE_UPSTREAM_STATUSES.has(response.status)) {
         const errorBody = await response.text();
         const err: any = new Error(errorBody);
+        err.upstreamRejected = true;
         err.statusCode = response.status;
         err.code = safeErrorCode(errorBody, response.status);
         await this.reportUpstreamFailure(ctx, response.status, err.code);
@@ -365,6 +312,7 @@ export class RelayService {
       return;
     }
 
+    ctx.upstreamAccepted = true;
     const responseBody = await response.json();
     const usage = this.extractUsage(responseBody, ctx.protocol);
     await this.settle(ctx, usage, "succeeded", 200);
@@ -384,12 +332,14 @@ export class RelayService {
       method: "POST",
       headers: { ...headers, accept: "text/event-stream" },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(600000),
     });
 
     if (!response.ok) {
       if (RETRYABLE_UPSTREAM_STATUSES.has(response.status)) {
         const errorBody = await response.text();
         const err: any = new Error(errorBody);
+        err.upstreamRejected = true;
         err.statusCode = response.status;
         err.code = safeErrorCode(errorBody, response.status);
         await this.reportUpstreamFailure(ctx, response.status, err.code);
@@ -402,6 +352,7 @@ export class RelayService {
       return;
     }
 
+    ctx.upstreamAccepted = true;
     reply.raw.writeHead(200, {
       "content-type": "text/event-stream",
       "cache-control": "no-cache",
@@ -487,13 +438,13 @@ export class RelayService {
       try {
         const payload = verifyToken(rawKey, (request.server as any).env?.JWT_SECRET || process.env.JWT_SECRET);
         apiKey = await this.prisma.apiKey.findFirst({
-          where: { userId: payload.userId, status: "active" },
+          where: { userId: payload.userId, status: "active", deletedAt: null },
           include: { user: true, plan: true, keyGroup: true },
           orderBy: { createdAt: "asc" },
         });
       } catch {}
     }
-    if (!apiKey || apiKey.status !== "active") throw unauthorized("Invalid API key");
+    if (!apiKey || apiKey.deletedAt || apiKey.status !== "active") throw unauthorized("Invalid API key");
     if (!ipAllowed(request.ip, Array.isArray(apiKey.allowedIps) ? apiKey.allowedIps : [])) throw forbidden("IP address not allowed on this key");
     return apiKey;
   }
@@ -526,16 +477,8 @@ export class RelayService {
       throw rateLimited("API key call limit reached");
     }
 
-    // Daily spending limit — user-level tracking, default $50/day unless key says unlimited (-1)
-    if (apiKey.dailyLimit !== -1n) {
-      const dailyLimit = Number(apiKey.dailyLimit > 0 ? apiKey.dailyLimit : 50_000_000);
-      const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-      const dailyKey = redisKeys.userDailySpending(user.id, today);
-      const dailySpent = await this.redis.get(dailyKey);
-      if (dailySpent && Number(dailySpent) >= dailyLimit) {
-        throw rateLimited("Daily spending limit reached");
-      }
-    }
+    // Daily monetary limits are checked atomically against PostgreSQL ledgers + holds.
+
   }
 
   // ---- Rate limit ----
@@ -735,129 +678,23 @@ export class RelayService {
 
   // ---- Billing settlement ----
 
-  private async settle(
-    ctx: RelayContext,
-    usage: UsageInfo,
-    status: string,
-    httpStatus: number,
-    errorCode?: string,
-  ) {
-    if (ctx.isProbe) return;
-    const finishedAt = new Date();
+  private async reserveQuota(...args: Parameters<ReservationService["reserve"]>) {
+    return new ReservationService(this.prisma).reserve(...args);
+  }
 
+  private async settle(ctx: RelayContext, usage: UsageInfo, status: string, httpStatus: number, errorCode?: string) {
+    if(ctx.isProbe) return;
     try {
-      // Calculate billing — prices are USD per 1M tokens
-      const alias = await this.prisma.modelAlias.findUnique({
-        where: { alias: ctx.model },
-      });
-      let billableUnits = 0n;
-      let pricingDetail: any = undefined;
-
-      if (alias && (usage.inputTokens > 0 || usage.outputTokens > 0 || usage.cacheReadTokens > 0 || usage.cacheCreationTokens > 0 || (usage.imageInputTokens ?? 0) > 0)) {
-        const priced = calculateTokenPrice(alias, usage, ctx.apiKey.plan?.billingMultiplier ?? 1, ctx.channelBillingMultiplier ?? 1);
-        billableUnits = priced.billableUnits;
-        pricingDetail = priced.detail;
-      }
-
-      const period = finishedAt.toISOString().slice(0, 7).replace("-", "");
-
-      await this.prisma.$transaction(async (tx) => {
-        // Request log
-        await tx.requestLog.create({
-          data: {
-            requestId: ctx.requestId,
-            userId: ctx.apiKey.userId,
-            apiKeyId: ctx.apiKey.id,
-            endpoint: ctx.endpoint ?? (ctx.protocol === "anthropic" ? "/v1/messages" : "/v1/chat/completions"),
-            requestedModel: ctx.model,
-            actualUpstreamModel: ctx.upstreamModel,
-            channelId: ctx.channelId,
-            nodeId: ctx.nodeId,
-            stream: ctx.stream ?? false,
-            status: status as any,
-            httpStatus,
-            errorCode: errorCode ?? null,
-            inputTokens: usage.inputTokens,
-            outputTokens: usage.outputTokens,
-            cacheCreationTokens: usage.cacheCreationTokens,
-            cacheReadTokens: usage.cacheReadTokens,
-            billableUnits,
-            pricingDetail,
-            startedAt: ctx.startedAt,
-            finishedAt,
-            durationMs: finishedAt.getTime() - ctx.startedAt.getTime(),
-          },
-        });
-
-        // Usage ledger
-        if (billableUnits > 0n) {
-          await tx.usageLedger.create({
-            data: {
-              requestId: ctx.requestId,
-              userId: ctx.apiKey.userId,
-              apiKeyId: ctx.apiKey.id,
-              channelId: ctx.channelId,
-              billingPeriod: period,
-              billedRequests: 1,
-              inputTokens: usage.inputTokens,
-              outputTokens: usage.outputTokens,
-              cacheCreationTokens: usage.cacheCreationTokens,
-              cacheReadTokens: usage.cacheReadTokens,
-              billableUnits,
-              cost: pricingDetail ? pricingDetail.costUsd : 0,
-              billingMultiplier: pricingDetail ? pricingDetail.billingMultiplier : 1,
-              settlementStatus: "final",
-            },
-          });
-
-          // Deduct from key quota
-          await tx.apiKey.update({
-            where: { id: ctx.apiKey.id },
-            data: {
-              usedQuota: { increment: billableUnits },
-              usedCalls: { increment: 1n },
-              lastUsedAt: finishedAt,
-            },
-          });
-
-          // Deduct from key group quota (if key belongs to a group with a finite pool)
-          if (ctx.apiKey.keyGroupId) {
-            await tx.keyGroup.update({
-              where: { id: ctx.apiKey.keyGroupId },
-              data: { usedQuota: { increment: billableUnits } },
-            });
-          }
-
-          // Deduct from user quota
-          await tx.user.update({
-            where: { id: ctx.apiKey.userId },
-            data: {
-              usedQuota: { increment: billableUnits },
-              requestCount: { increment: 1n },
-            },
-          });
-        } else {
-          // Still update call count even if no billing
-          await tx.apiKey.update({
-            where: { id: ctx.apiKey.id },
-            data: {
-              usedCalls: { increment: 1n },
-              lastUsedAt: finishedAt,
-            },
-          });
-        }
-      });
-
-      // Update Redis daily spending
-      if (billableUnits > 0n) {
-        const today = finishedAt.toISOString().slice(0, 10).replace(/-/g, "");
-        const dailyKey = redisKeys.userDailySpending(ctx.apiKey.userId, today);
-        await this.redis.incrby(dailyKey, Number(billableUnits));
-        await this.redis.expire(dailyKey, 2 * 86400);
-      }
-    } catch (err) {
-      console.error("Settlement error:", err);
+      await new ReservationService(this.prisma).finish(ctx,usage,status,httpStatus,errorCode);
+    } catch {
+      // Keep the original reserved/pending/review state, even if the database is unavailable.
+      throw new SettlementError(ctx.requestId);
     }
+  }
+
+  private async holdAcceptedResult(ctx: RelayContext): Promise<never> {
+    try { await new ReservationService(this.prisma).markForReview(ctx.requestId,"accepted_result_unavailable"); }
+    finally { throw new SettlementError(ctx.requestId); }
   }
 
   // ---- Image generation ----
@@ -919,6 +756,7 @@ export class RelayService {
       protocol: "openai",
     };
 
+    await this.reserveQuota(requestId, apiKey.id, alias, body, {[node.channelId.toString()]:ctx.channelBillingMultiplier}, true);
     try {
       if (body.stream === true) throw badRequest("Streaming images are not supported on this endpoint");
       const path = "/v1/images/generations";
@@ -935,13 +773,16 @@ export class RelayService {
         reply.code(response.status).send(errorBody);
         return;
       }
+      ctx.upstreamAccepted = true;
       const result = await response.json() as any;
       if (!Array.isArray(result.data) || result.data.length === 0) throw internalError("Image generation returned no images");
       await this.settleImage(ctx, openAiUsage(result.usage), "succeeded", 200, path);
       reply.code(200).send(result);
     } catch (err: any) {
+      if (err instanceof SettlementError) throw err;
+      if (ctx.upstreamAccepted) await this.holdAcceptedResult(ctx);
       request.log.error({ err, requestId }, "Image generation upstream failed");
-      await this.settleImage(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", err.statusCode ?? 502, "/v1/images/generations");
+      await this.settleImage(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", err.statusCode ?? 502, "/v1/images/generations", err.statusCode ? "request_rejected" : "transport_unknown");
       if (err.statusCode) throw err;
       throw internalError("Image generation failed");
     }
@@ -1024,6 +865,14 @@ export class RelayService {
       protocol: "openai",
     };
 
+    // Derive reference count from actual uploaded files, never from a caller-supplied billing hint.
+    const referenceImages = [...formData.entries()].filter(([name, value]) =>
+      (name === "image" || name === "image[]") && value instanceof Blob);
+    await this.reserveQuota(requestId, apiKey.id, alias, {
+      prompt, n: Number(formData.get("n") ?? 1), size: formData.get("size") ?? "auto",
+      quality: formData.get("quality") ?? "auto",
+      images: referenceImages.map(() => ({ type: "input_image" })),
+    }, {[node.channelId.toString()]:ctx.channelBillingMultiplier}, true);
     try {
       const upstreamUrl = joinUpstreamUrl(node.internalUrl, "/v1/images/edits");
       const response = await fetch(upstreamUrl, {
@@ -1034,6 +883,7 @@ export class RelayService {
           "x-tokensea-user": apiKey.userId.toString(),
         },
         body: formData,
+        signal: AbortSignal.timeout(180000),
       });
 
       if (!response.ok) {
@@ -1044,112 +894,22 @@ export class RelayService {
         return;
       }
 
+      ctx.upstreamAccepted = true;
       const responseBody = await response.json();
       const editUsage = openAiUsage((responseBody as any).usage);
       await this.settleImage(ctx, editUsage, "succeeded", 200, "/v1/images/edits");
       reply.code(200).header("content-type", "application/json").send(responseBody);
     } catch (err: any) {
+      if (err instanceof SettlementError) throw err;
+      if (ctx.upstreamAccepted) await this.holdAcceptedResult(ctx);
       request.log.error({ err, requestId }, "Image edit upstream failed");
-      await this.settleImage(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", err.statusCode ?? 502, "/v1/images/edits");
+      await this.settleImage(ctx, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }, "failed", err.statusCode ?? 502, "/v1/images/edits", err.statusCode ? "request_rejected" : "transport_unknown");
       throw internalError("Image edit failed");
     }
   }
 
-  private async settleImage(
-    ctx: RelayContext,
-    usage: UsageInfo,
-    status: string,
-    httpStatus: number,
-    endpoint: string,
-    errorCode?: string,
-  ) {
-    if (ctx.isProbe) return;
-    const finishedAt = new Date();
-    try {
-      const alias = await this.prisma.modelAlias.findUnique({ where: { alias: ctx.model } });
-      // Token-based billing (same as chat models): prices are USD per 1M tokens
-      let billableUnits = 0n;
-      let pricingDetail: any = undefined;
-
-      if (alias && (usage.inputTokens > 0 || usage.outputTokens > 0 || usage.cacheReadTokens > 0 || usage.cacheCreationTokens > 0 || (usage.imageInputTokens ?? 0) > 0)) {
-        const priced = calculateTokenPrice(alias, usage, ctx.apiKey.plan?.billingMultiplier ?? 1, ctx.channelBillingMultiplier ?? 1);
-        billableUnits = priced.billableUnits;
-        pricingDetail = priced.detail;
-      }
-
-      const period = finishedAt.toISOString().slice(0, 7).replace("-", "");
-
-      await this.prisma.$transaction(async (tx) => {
-        await tx.requestLog.create({
-          data: {
-            requestId: ctx.requestId,
-            userId: ctx.apiKey.userId,
-            apiKeyId: ctx.apiKey.id,
-            endpoint,
-            requestedModel: ctx.model,
-            actualUpstreamModel: ctx.upstreamModel,
-            channelId: ctx.channelId,
-            nodeId: ctx.nodeId,
-            stream: ctx.stream ?? false,
-            status: status as any,
-            httpStatus,
-            errorCode: errorCode ?? null,
-            inputTokens: usage.inputTokens,
-            outputTokens: usage.outputTokens,
-            cacheCreationTokens: usage.cacheCreationTokens,
-            cacheReadTokens: usage.cacheReadTokens,
-            billableUnits,
-            pricingDetail,
-            startedAt: ctx.startedAt,
-            finishedAt,
-            durationMs: finishedAt.getTime() - ctx.startedAt.getTime(),
-          },
-        });
-
-        if (billableUnits > 0n) {
-          await tx.usageLedger.create({
-            data: {
-              requestId: ctx.requestId,
-              userId: ctx.apiKey.userId,
-              apiKeyId: ctx.apiKey.id,
-              channelId: ctx.channelId,
-              billingPeriod: period,
-              billedRequests: 1,
-              inputTokens: usage.inputTokens,
-              outputTokens: usage.outputTokens,
-              cacheCreationTokens: usage.cacheCreationTokens,
-              cacheReadTokens: usage.cacheReadTokens,
-              billableUnits,
-              cost: pricingDetail ? pricingDetail.costUsd : 0,
-              billingMultiplier: pricingDetail ? pricingDetail.billingMultiplier : 1,
-              settlementStatus: "final",
-            },
-          });
-          await tx.apiKey.update({
-            where: { id: ctx.apiKey.id },
-            data: { usedQuota: { increment: billableUnits }, usedCalls: { increment: 1n }, lastUsedAt: finishedAt },
-          });
-          await tx.user.update({
-            where: { id: ctx.apiKey.userId },
-            data: { usedQuota: { increment: billableUnits }, requestCount: { increment: 1n } },
-          });
-        } else {
-          await tx.apiKey.update({
-            where: { id: ctx.apiKey.id },
-            data: { usedCalls: { increment: 1n }, lastUsedAt: finishedAt },
-          });
-        }
-      });
-
-      if (billableUnits > 0n) {
-        const today = finishedAt.toISOString().slice(0, 10).replace(/-/g, "");
-        const dailyKey = redisKeys.userDailySpending(ctx.apiKey.userId, today);
-        await this.redis.incrby(dailyKey, Number(billableUnits));
-        await this.redis.expire(dailyKey, 2 * 86400);
-      }
-    } catch (err) {
-      console.error("Image settlement error:", err);
-    }
+  private async settleImage(ctx: RelayContext, usage: UsageInfo, status: string, httpStatus: number, endpoint: string, errorCode?: string) {
+    await this.settle({...ctx,endpoint},usage,status,httpStatus,errorCode);
   }
 
   // ---- Protocol conversion ----
