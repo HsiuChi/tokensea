@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Install all deps (including dev for tsx)
 COPY package.json package-lock.json ./
-RUN npm install
+RUN npm ci
 
 # Copy source and generate Prisma client
 COPY prisma ./prisma
@@ -17,7 +17,7 @@ COPY src ./src
 # Build frontend
 WORKDIR /app/web
 COPY web/package.json web/package-lock.json ./
-RUN npm install
+RUN npm ci
 COPY web/ ./
 RUN npm run build
 

@@ -3,7 +3,7 @@ import type { Env } from "../../config/env.js";
 import { internalError } from "../../lib/errors.js";
 
 export class EmailService {
-  private transporter: nodemailer.Transporter | null = null;
+  private transporter: ReturnType<typeof nodemailer.createTransport> | null = null;
   private from: string;
   private frontendUrl: string;
   private configured: boolean;
