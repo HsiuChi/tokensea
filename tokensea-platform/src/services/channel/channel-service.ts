@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import { badRequest, notFound } from "../../lib/errors.js";
 import { encryptUpstreamSecret, maskUpstreamSecret, upstreamSecretFingerprint } from "../../lib/upstream-secret.js";
 import { KSYUN_MODELS } from "../../config/ksyun-model-catalog.js";
+import { REVIEWED_VISION_MODELS } from '../../config/model-capabilities.js';
 import { preserveRetailPrice } from "../billing/trial-pricing.js";
 import { probeCpa, upstreamHeaders, upstreamUrl } from "./upstream-request.js";
 
@@ -146,7 +147,7 @@ export class ChannelService {
           displayName: model.displayName, provider: model.provider, inputPrice: usd(model.inputPrice),
           outputPrice: usd(model.outputPrice), cacheReadPrice: usd(model.cacheReadPrice ?? 0),
           description: model.description ?? null, category: model.category ?? "chat",
-          maxContext: model.maxContext, supportsVision: model.supportsVision ?? false,
+          maxContext: model.maxContext, supportsVision: model.supportsVision ?? REVIEWED_VISION_MODELS.has(model.id),
           supportsStream: model.supportsStream ?? true, supportsTools: model.supportsTools ?? true, status: "active",
           pricing: model.category === "video" ? Prisma.JsonNull : { currency: "USD", unit: "1M tokens", source: "KSP public pricing", cnyPerUsd, upstreamCny: { input: model.inputPrice, output: model.outputPrice, cacheRead: model.cacheReadPrice ?? 0 }, firstTier: true },
           ...preserveRetailPrice(existingPrice),
@@ -157,7 +158,7 @@ export class ChannelService {
           category: model.category ?? "chat", tags: [model.provider, model.category ?? "chat"],
           inputPrice: usd(model.inputPrice), outputPrice: usd(model.outputPrice),
           cacheReadPrice: usd(model.cacheReadPrice ?? 0), maxContext: model.maxContext,
-          supportsVision: model.supportsVision ?? false, supportsStream: model.supportsStream ?? true,
+          supportsVision: model.supportsVision ?? REVIEWED_VISION_MODELS.has(model.id), supportsStream: model.supportsStream ?? true,
           supportsTools: model.supportsTools ?? true, sortOrder: 1000 - sortOrder, status: "active",
           pricing: model.category === "video" ? Prisma.JsonNull : { currency: "USD", unit: "1M tokens", source: "KSP public pricing", cnyPerUsd, upstreamCny: { input: model.inputPrice, output: model.outputPrice, cacheRead: model.cacheReadPrice ?? 0 }, firstTier: true },
         },

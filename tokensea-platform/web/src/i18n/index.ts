@@ -9,10 +9,13 @@ i18n
   .use(initReactI18next)
   .init({
     resources: { en: { translation: en }, zh: { translation: zh } },
-    fallbackLng: "en",
+    fallbackLng: "zh",
+    supportedLngs: ['zh','en'],
+    nonExplicitSupportedLngs: true,
+    load: 'languageOnly',
     interpolation: { escapeValue: false },
     detection: {
-      order: ["localStorage", "navigator"],
+      order: ["localStorage"],
       lookupLocalStorage: "lang",
       caches: ["localStorage"],
     },

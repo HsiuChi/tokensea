@@ -126,7 +126,7 @@ export function AppLayout({ children, admin }: { children: React.ReactNode; admi
         <div className="hidden md:block" />
         <div className="flex items-center gap-1 sm:gap-2">
           <button className="hidden h-9 items-center rounded-lg px-3 text-sm font-semibold text-slate-700 hover:bg-slate-100 sm:flex dark:text-slate-300 dark:hover:bg-white/10"><BookOpen className="mr-2 h-4 w-4" />{t("dashboard.apiDocs")}</button>
-          <button onClick={() => i18n.changeLanguage(i18n.language === "en" ? "zh" : "en")} className="flex h-9 items-center rounded-lg px-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/10"><Languages className="mr-1.5 h-4 w-4" />{i18n.language === "en" ? "中文" : "EN"}</button>
+          <button aria-label={i18n.resolvedLanguage==='en'?'Switch to Chinese':'切换到英文'} onClick={() => i18n.changeLanguage(i18n.resolvedLanguage === "en" ? "zh" : "en")} className="flex h-9 items-center rounded-lg px-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/10"><Languages className="mr-1.5 h-4 w-4" />{i18n.resolvedLanguage === "en" ? "English" : "简体中文"}</button>
           <ThemeToggle />
           <button className="relative flex h-9 w-9 items-center justify-center rounded-lg text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/10"><Bell className="h-[19px] w-[19px]" /><span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full border-2 border-white bg-red-500 dark:border-slate-900" /></button>
         </div>

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { modelCapabilities } from '../config/model-capabilities.js';
 import { RelayService } from "../services/relay/relay-service.js";
 
 export async function relayRoutes(app: FastifyInstance) {
@@ -79,7 +80,9 @@ export async function relayRoutes(app: FastifyInstance) {
       capabilities: {
         stream: m.supportsStream,
         tools: m.supportsTools,
-        vision: m.supportsVision,
+        vision: modelCapabilities(m).visionUnderstanding,
+        image_input: modelCapabilities(m).imageInput,
+        categories: modelCapabilities(m).categories,
       },
       max_context: m.maxContext,
       pricing: {

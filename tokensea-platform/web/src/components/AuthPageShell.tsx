@@ -29,14 +29,15 @@ export function AuthPageShell({ children, wideForm = false }: { children: ReactN
         <AuthBrand />
         <div className="flex items-center gap-1.5">
           <button
-            onClick={() => i18n.changeLanguage(i18n.language === "en" ? "zh" : "en")}
+            onClick={() => i18n.changeLanguage(i18n.resolvedLanguage === "en" ? "zh" : "en")}
+            aria-label={i18n.resolvedLanguage==='en'?'Switch to Chinese':'切换到英文'}
             className="flex items-center gap-2 rounded-full px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-white/55 dark:text-slate-300 dark:hover:bg-white/8"
           >
             <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
               <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" />
               <path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
-            {i18n.language === "en" ? "中文" : "EN"}
+            {i18n.resolvedLanguage === "en" ? "English" : "简体中文"}
           </button>
           <ThemeToggle />
         </div>

@@ -88,13 +88,14 @@ interface FileAttachment {
 // ---------------------------------------------------------------------------
 
 function ImageBlock({ img, idx, onDownload }: { img: GeneratedImage; idx: number; onDownload: (url: string, idx: number) => void }) {
+  const {t}=useTranslation()
   const src = img.url || (img.b64_json ? "data:image/png;base64," + img.b64_json : "")
   return (
     <div className="group/img relative rounded-xl overflow-hidden">
       {src ? (
-        <img src={src} alt={img.revised_prompt || "Generated " + (idx + 1)} className="w-full object-contain rounded-xl" loading="lazy" />
+        <img src={src} alt={img.revised_prompt || t('chat.generatedImage') + ' ' + (idx + 1)} className="w-full object-contain rounded-xl" loading="lazy" />
       ) : (
-        <div className="flex items-center justify-center text-slate-400 text-sm dark:text-slate-500 py-8">No preview</div>
+        <div className="flex items-center justify-center text-slate-400 text-sm dark:text-slate-500 py-8">{t('chat.noPreview')}</div>
       )}
       {src && (
         <div className="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover/img:opacity-100 transition-opacity">
@@ -786,7 +787,7 @@ export function ChatPage() {
                     : t("chat.title", { defaultValue: "Chat" })}
                 </h1>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  {model || "Select a model"}
+                  {model || t('chat.selectModel')}
                 </p>
               </div>
             </div>
@@ -795,7 +796,7 @@ export function ChatPage() {
           <div className="flex items-center gap-2">
             <Select value={model} onValueChange={next=>{if(/^(seedance|kling|hailuo)-/.test(next)){navigate('/app/video?model='+encodeURIComponent(next));return}setModel(next)}}>
               <SelectTrigger className="w-[200px] h-8 text-xs dark:bg-slate-800 dark:border-slate-700">
-                <SelectValue placeholder={modelsLoaded ? "Select model" : "Loading..."} />
+                <SelectValue placeholder={t(modelsLoaded ? 'chat.selectModel' : 'chat.loadingModels')} />
               </SelectTrigger>
               <SelectContent>
                 {models.length > 0 ? (

@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { publicPricing } from '../services/billing/trial-pricing.js';
 import { CNY_PER_USD } from '../shared/money.js';
+import { withCapabilities } from '../config/model-capabilities.js';
 
 export async function publicRoutes(app: FastifyInstance) {
 
@@ -139,7 +140,6 @@ export async function publicRoutes(app: FastifyInstance) {
     }).parse(request.query);
 
     const where: any = { status: "active" };
-    if (query.category) where.category = query.category;
     if (query.provider) where.provider = query.provider;
     if (query.search) {
       where.OR = [
@@ -178,8 +178,7 @@ export async function publicRoutes(app: FastifyInstance) {
     // Get distinct categories for filter sidebar
     const categories = await app.prisma.modelAlias.findMany({
       where: { status: "active" },
-      select: { category: true },
-      distinct: ["category"],
+      select: { alias:true, category: true, supportsVision:true },
       orderBy: { category: "asc" },
     });
 
@@ -192,9 +191,9 @@ export async function publicRoutes(app: FastifyInstance) {
     });
 
     return {
-      data: models.map(m=>({...m,pricing:publicPricing(m.pricing)})),
+      data: models.map(withCapabilities).filter(m=>!query.category||m.capabilities.categories.includes(query.category)).map(m=>({...m,pricing:publicPricing(m.pricing)})),
       currency:{primary:'CNY',ledger:'USD',cnyPerUsd:CNY_PER_USD,rateType:'fixed_platform_rate'},
-      categories: categories.map((c) => c.category),
+      categories: [...new Set(categories.flatMap(c=>withCapabilities(c).capabilities.categories))],
       providers: providers.map((p) => p.provider),
     };
   });
@@ -211,6 +210,6 @@ export async function publicRoutes(app: FastifyInstance) {
     if (!model) return { data: null };
 
     const {routes,...safe}=model;
-    return { data: {...safe,pricing:publicPricing(model.pricing)} };
+    return { data: {...withCapabilities(safe),pricing:publicPricing(model.pricing)} };
   });
 }

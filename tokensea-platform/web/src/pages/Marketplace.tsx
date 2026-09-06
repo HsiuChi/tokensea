@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, useRef } from "react"
 import { useNavigate } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 import { api } from "@/services/api"
@@ -203,22 +203,24 @@ export function MarketplacePage() {
   const [selectedProvider, setSelectedProvider] = useState("")
   const [sortMode, setSortMode] = useState<SortMode>("default")
   const [selectedModel, setSelectedModel] = useState<any>(null)
+  const loadVersion=useRef(0)
 
   useEffect(() => { loadModels() }, [selectedCategory, selectedProvider])
 
   async function loadModels() {
+    const version=++loadVersion.current
     setLoading(true)
     const params = new URLSearchParams()
     if (selectedCategory) params.set("category", selectedCategory)
     if (selectedProvider) params.set("provider", selectedProvider)
-    if (search) params.set("search", search)
     try {
       const res = await api.getMarketplaceModels(params.toString())
+      if(version!==loadVersion.current)return
       setModels(res.data || [])
       if (res.categories) setCategories(res.categories)
       if (res.providers) setProviders(res.providers)
     } catch {}
-    setLoading(false)
+    if(version===loadVersion.current)setLoading(false)
   }
 
   const filteredSorted = useMemo(() => {
@@ -480,7 +482,7 @@ function ModelCard({ model, onClick, t, onTry }: { model: any; onClick: () => vo
           )}
           {model.supportsVision && (
             <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-300">
-              <Eye className="h-2.5 w-2.5" /> {t("marketplace.vision")}
+              <Eye className="h-2.5 w-2.5" /> {model.capabilities?.visionUnderstanding ? t("marketplace.vision") : t('marketplace.imageInput', {defaultValue:'图片输入'})}
             </span>
           )}
         </div>
@@ -674,7 +676,7 @@ function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => voi
           <CapabilityTile
             active={model.supportsVision}
             icon={<Eye className="h-4 w-4" />}
-            label={t("marketplace.vision")}
+            label={t(model.capabilities?.visionUnderstanding ? "marketplace.vision" : "marketplace.imageInput")}
             activeColor="text-emerald-500 bg-emerald-50 dark:bg-emerald-500/10"
           />
         </div>}
