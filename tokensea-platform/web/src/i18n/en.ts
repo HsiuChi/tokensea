@@ -913,6 +913,7 @@ const en = {
     latency: "Latency",
   },
   chat: {
+    closeSessions: 'Close conversations',
     deleteChatTitle: 'Delete conversation',
     deleteChatConfirm: 'Delete this conversation? This cannot be undone.',
     newChatTitle: 'New conversation',

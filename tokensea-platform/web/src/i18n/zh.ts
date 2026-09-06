@@ -913,6 +913,7 @@ const zh = {
     latency: "延迟",
   },
   chat: {
+    closeSessions: '关闭对话记录',
     deleteChatTitle: '删除对话',
     deleteChatConfirm: '确定删除这段对话吗？删除后无法恢复。',
     newChatTitle: '新对话',

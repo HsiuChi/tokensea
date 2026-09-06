@@ -320,7 +320,7 @@ export function ChatPage() {
   // --- Chat history ---
   const [chats, setChats] = useState<Chat[]>(loadChats)
   const [activeChatId, setActiveChatId] = useState<string | null>(null)
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 768)
   const [deleteDialogId, setDeleteDialogId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -708,16 +708,19 @@ export function ChatPage() {
   // -------------------------------------------------------------------------
 
   return (
-    <div className="h-[calc(100vh-7rem)] flex gap-0">
+    <div className="relative h-[calc(100dvh-7rem)] flex gap-0">
       {/* ---- Sidebar ---- */}
       {sidebarOpen && (
-        <div className="w-64 border-r border-slate-200/80 bg-slate-50/50 flex flex-col shrink-0 dark:border-slate-800/60 dark:bg-slate-900/30">
+        <div className="absolute inset-y-0 left-0 z-20 md:static w-64 border-r border-slate-200/80 bg-slate-50 md:bg-slate-50/50 flex flex-col shrink-0 dark:border-slate-800/60 dark:bg-slate-900 md:dark:bg-slate-900/30">
           <div className="p-3 flex items-center justify-between border-b border-slate-200/80 dark:border-slate-800/60">
             <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">
               {t("chat.sessions", { defaultValue: "Sessions" })}
             </span>
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={createNewChat}>
               <Plus className="h-4 w-4" />
+            </Button>
+            <Button variant="ghost" size="icon" className="h-7 w-7 md:hidden" aria-label={t('chat.closeSessions')} onClick={() => setSidebarOpen(false)}>
+              <X className="h-4 w-4" />
             </Button>
           </div>
           <ScrollArea className="flex-1">
@@ -736,7 +739,7 @@ export function ChatPage() {
                       ? "bg-blue-50 font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-400"
                       : "text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-white/5"
                   )}
-                  onClick={() => setActiveChatId(chat.id)}
+                  onClick={() => {setActiveChatId(chat.id); if(window.innerWidth<768)setSidebarOpen(false)}}
                 >
                   <MessageSquare className="h-3.5 w-3.5 shrink-0 text-slate-400 dark:text-slate-500" />
                   <span className="flex-1 truncate">{chat.title}</span>
@@ -761,12 +764,13 @@ export function ChatPage() {
       {/* ---- Main area ---- */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header bar */}
-        <div className="flex items-center justify-between border-b border-slate-200/80 px-4 py-2 gap-2 dark:border-slate-800/60">
+        <div className="flex flex-wrap items-center justify-between border-b border-slate-200/80 px-4 py-2 gap-2 dark:border-slate-800/60">
           <div className="flex items-center gap-2">
             <Button
               variant="ghost"
               size="icon"
               className="h-7 w-7"
+              aria-label={t('chat.sessions')}
               onClick={() => setSidebarOpen(!sidebarOpen)}
             >
               <ChevronLeft
