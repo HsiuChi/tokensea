@@ -367,7 +367,8 @@ export function MarketplacePage() {
               {filteredSorted.map((m: any) => (
                 <ModelCard key={m.id || m.alias} model={m} onClick={() => setSelectedModel(m)} t={t} onTry={() => {
                   if (m.category === "video") {
-                    setSelectedModel(m)
+                    if(m.alias==='seedance-2.0-o'){setSelectedModel(m);return}
+                    navigate(`/app/video?model=${encodeURIComponent(m.alias)}`)
                     return
                   }
                   const mode = m.category === "image" ? "image" : "chat"
@@ -384,6 +385,7 @@ export function MarketplacePage() {
         <DialogContent className="max-w-2xl rounded-[24px] p-0 max-h-[90vh] overflow-y-auto">
           {selectedModel && <ModelDetail model={selectedModel} t={t} onTry={() => {
             setSelectedModel(null)
+            if(selectedModel.category==='video'){navigate(`/app/video?model=${encodeURIComponent(selectedModel.alias)}`);return}
             const mode = selectedModel.category === "image" ? "image" : "chat"
             navigate(`/app/chat?model=${encodeURIComponent(selectedModel.alias)}&mode=${mode}`)
           }} />}
@@ -520,7 +522,7 @@ function ModelCard({ model, onClick, t, onTry }: { model: any; onClick: () => vo
             className="rounded-lg bg-blue-600 px-2.5 py-1 text-[10px] font-bold text-white shadow-sm hover:bg-blue-700 transition-colors"
           >
             {isVideo ? <Terminal className="inline h-2.5 w-2.5 mr-0.5 -mt-px" /> : <Play className="inline h-2.5 w-2.5 mr-0.5 -mt-px" />}
-            {isVideo ? t("marketplace.viewApiUsage") : t("marketplace.tryInPlayground")}
+            {isVideo ? (model.alias==='seedance-2.0-o'?'查看说明':'视频工作台') : t("marketplace.tryInPlayground")}
           </button>
         </div>
       </div>
@@ -807,9 +809,9 @@ function ModelDetail({ model, t, onTry }: { model: any; t: any; onTry: () => voi
         </div>
       </div>
 
-      {!isVideo && (
+      {model.alias!=='seedance-2.0-o' && (
         <Button className="w-full h-12 rounded-xl font-bold shadow-lg shadow-blue-500/25" onClick={onTry}>
-          <Play className="mr-2 h-4 w-4" /> {t("marketplace.tryInPlayground")}
+          <Play className="mr-2 h-4 w-4" /> {isVideo?'进入视频工作台':t("marketplace.tryInPlayground")}
         </Button>
       )}
     </div>

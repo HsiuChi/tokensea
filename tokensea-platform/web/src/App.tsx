@@ -15,6 +15,7 @@ import { UsagePage } from "@/pages/Usage"
 import { SettingsPage } from "@/pages/Settings"
 import { TopupPage } from "@/pages/Topup"
 import { ChatPage } from "@/pages/Chat"
+import { VideoWorkbenchPage } from '@/pages/VideoWorkbench'
 import { LogsPage } from "@/pages/Logs"
 import { MarketplacePage } from "@/pages/Marketplace"
 import { ChannelStatusPage } from "@/pages/ChannelStatus"
@@ -60,6 +61,7 @@ function AppRoutes() {
       <Route path="/app/channels" element={<ProtectedRoute><ChannelStatusPage /></ProtectedRoute>} />
       <Route path="/app/deploy" element={<ProtectedRoute><DeployPage /></ProtectedRoute>} />
       <Route path="/app/chat" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
+      <Route path="/app/video" element={<ProtectedRoute><VideoWorkbenchPage /></ProtectedRoute>} />
       <Route path="/app/logs" element={<ProtectedRoute><LogsPage /></ProtectedRoute>} />
       <Route path="/admin" element={<ProtectedRoute admin><AdminDashboard /></ProtectedRoute>} />
       <Route path="/admin/users" element={<ProtectedRoute admin><AdminUsers /></ProtectedRoute>} />

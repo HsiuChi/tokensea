@@ -33,6 +33,12 @@ try {
   assert.equal(posts,1,'retry using another selected node does not create another task');
   await assert.rejects(tasks.submit(id,key.id,alias,{...body,duration:10},node,1.5,alias.alias,'v1/videos/text2video'),/different/);
   await assert.rejects(tasks.get(user.id+999999n,alias.alias,id),/not found/);
+  assert.equal((await tasks.list(user.id))[0].id,id,'server history recovers the submitted task');
+  assert.deepEqual(await tasks.list(user.id+999999n),[],'history is owner scoped');
+  assert.equal((await tasks.list(user.id))[0].nodeId,undefined,'history does not expose upstream node');
+  assert.equal((await tasks.existingSubmission(user.id,key.id,alias.alias,id,body)).id,id);
+  assert.equal(await tasks.existingSubmission(user.id+999n,key.id,alias.alias,id,body),null);
+  await assert.rejects(tasks.existingSubmission(user.id,key.id,alias.alias,id,{...body,prompt:'changed'}),/different/);
   const hold=await p.billingReservation.findUniqueOrThrow({where:{requestId:id}});
   assert.equal(hold.amount,937500n);
   await p.billingReservation.update({where:{requestId:id},data:{createdAt:new Date(Date.now()-30*60*1000)}});

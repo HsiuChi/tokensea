@@ -3,10 +3,16 @@ import { z } from "zod";
 import { userAuthHook, adminAuthHook } from "../middleware/user-auth.js";
 import { ReservationService } from "../services/billing/reservation-service.js";
 import { quoteReservation } from "../services/billing/reservation-estimate.js";
+import { VideoTaskService } from '../services/billing/video-task-service.js';
 import { badRequest, forbidden, notFound } from "../lib/errors.js";
 
 export async function billingRoutes(app: FastifyInstance) {
   const billing=new ReservationService(app.prisma);
+  app.get('/video-tasks',{preHandler:userAuthHook},async request=>{
+    const user=await app.prisma.user.findUnique({where:{id:request.userId!}});
+    if(!user||user.status!=='active') throw forbidden('Account is disabled');
+    return {data:await new VideoTaskService(app.prisma).list(user.id)};
+  });
   app.post("/estimate",{preHandler:userAuthHook},async request=>{
     const {apiKeyId,model,parameters}=z.object({apiKeyId:z.coerce.bigint().positive(),model:z.string().min(1).max(64),parameters:z.record(z.any()).default({})}).parse(request.body);
     const key=await app.prisma.apiKey.findFirst({where:{id:apiKeyId,userId:request.userId!,deletedAt:null,status:"active"},include:{plan:true,keyGroup:true}});

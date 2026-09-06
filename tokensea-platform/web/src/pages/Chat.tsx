@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react"
 import { useTranslation } from "react-i18next"
-import { useSearchParams } from "react-router-dom"
+import { useSearchParams, useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -270,6 +270,7 @@ async function extractFileContent(
 
 export function ChatPage() {
   const { t } = useTranslation()
+  const navigate=useNavigate()
 
   const [searchParams] = useSearchParams()
   const urlModel = searchParams.get("model")
@@ -792,7 +793,7 @@ export function ChatPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            <Select value={model} onValueChange={setModel}>
+            <Select value={model} onValueChange={next=>{if(/^(seedance|kling|hailuo)-/.test(next)){navigate('/app/video?model='+encodeURIComponent(next));return}setModel(next)}}>
               <SelectTrigger className="w-[200px] h-8 text-xs dark:bg-slate-800 dark:border-slate-700">
                 <SelectValue placeholder={modelsLoaded ? "Select model" : "Loading..."} />
               </SelectTrigger>

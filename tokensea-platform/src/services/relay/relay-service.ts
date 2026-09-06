@@ -262,8 +262,13 @@ export class RelayService {
     }
     const keyModels = apiKey.models as string[] | null, groupModels = apiKey.keyGroup?.models as string[] | null;
     if ((keyModels?.length && !keyModels.includes(model)) || (groupModels?.length && !groupModels.includes(model))) throw forbidden("Model not allowed on this key");
-    await this.checkRateLimit(apiKey.userId,apiKey.plan);
+    const idempotency = request.headers["idempotency-key"];
+    if (idempotency !== undefined && (typeof idempotency !== "string" || !/^[a-zA-Z0-9_-]{8,128}$/.test(idempotency))) throw badRequest("Idempotency-Key must be 8-128 letters, digits, underscores or hyphens");
+    const id = typeof idempotency === "string" ? uuidV5(apiKey.id.toString()+":"+idempotency,uuidV5.URL) : uuid();
     const body = (request.body ?? {}) as Record<string,any>;
+    const existing=await tasks.existingSubmission(apiKey.userId,apiKey.id,model,id,body);
+    if(existing)return reply.code(202).send(existing);
+    await this.checkRateLimit(apiKey.userId,apiKey.plan);
     const text = this.extractContentText(body);
     if (text && (await new SensitiveWordService(this.prisma,this.redis).checkContent(text)).blocked) throw badRequest("Content contains prohibited content");
     const {alias,routes} = await this.resolveRoute(model);
@@ -272,9 +277,6 @@ export class RelayService {
     const nodes = await this.getHealthyNodesForChannels(channels.map(c=>c.id));
     const node = this.selectNodeFromPool(nodes,new Set());
     if (!node) throw internalError("No available upstream nodes");
-    const idempotency = request.headers["idempotency-key"];
-    if (idempotency !== undefined && (typeof idempotency !== "string" || !/^[a-zA-Z0-9_-]{8,128}$/.test(idempotency))) throw badRequest("Idempotency-Key must be 8-128 letters, digits, underscores or hyphens");
-    const id = typeof idempotency === "string" ? uuidV5(apiKey.id.toString()+":"+idempotency,uuidV5.URL) : uuid();
     const upstreamModel = routes.find(r=>r.channelId===node.channelId)?.upstreamModel ?? model;
     const result = await tasks.submit(id,apiKey.id,alias,body,node,channels.find(c=>c.id===node.channelId)?.billingMultiplier??1,upstreamModel,suffix);
     return reply.code(202).send(result);
@@ -437,8 +439,10 @@ export class RelayService {
     } else {
       try {
         const payload = verifyToken(rawKey, (request.server as any).env?.JWT_SECRET || process.env.JWT_SECRET);
+        const selectedKey = request.headers['x-tokensea-key-id'];
+        if (selectedKey !== undefined && (typeof selectedKey !== 'string' || !/^[1-9]\d{0,18}$/.test(selectedKey))) throw unauthorized('Invalid selected key');
         apiKey = await this.prisma.apiKey.findFirst({
-          where: { userId: payload.userId, status: "active", deletedAt: null },
+          where: { userId: payload.userId, status: "active", deletedAt: null, ...(selectedKey ? {id:BigInt(selectedKey as string)} : {}) },
           include: { user: true, plan: true, keyGroup: true },
           orderBy: { createdAt: "asc" },
         });

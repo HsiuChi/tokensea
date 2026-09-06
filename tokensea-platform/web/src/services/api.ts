@@ -12,12 +12,14 @@ async function request<T>(path: string, options?: RequestInit, raw?: boolean): P
   const data = await res.json();
 
   if (!res.ok) {
-    throw new Error(data.error?.message || `Request failed: ${res.status}`);
+    throw Object.assign(new Error(data.error?.message || `Request failed: ${res.status}`),{status:res.status});
   }
   return raw ? data : (data.data ?? data);
 }
 
 export const api = {
+  videoTasks: () => request<any[]>('/api/billing/video-tasks'),
+  submitVideo: (model:string,path:string,body:any,key:string,id:string) => request<any>('/v1/video/'+encodeURIComponent(model)+'/'+path,{method:'POST',headers:{'X-TokenSea-Key-Id':key,'Idempotency-Key':id},body:JSON.stringify(body)},true),
   billingEstimate: (apiKeyId:string,model:string,parameters:any) => request<any>("/api/billing/estimate",{method:"POST",body:JSON.stringify({apiKeyId,model,parameters})}),
   billingReview: (id:string,action:"retry"|"release",reason:string) => request<any>("/api/billing/review/"+id,{method:"POST",body:JSON.stringify({action,reason})}),
   billingSelf: () => request<any>("/api/billing/self"),

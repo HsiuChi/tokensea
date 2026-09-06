@@ -71,10 +71,22 @@ export class VideoTaskService {
     return this.publicTask(row);
   }
 
+  async list(userId: bigint) {
+    const rows = await this.p.billingReservation.findMany({where:{userId,NOT:{payload:{path:['videoJob','model'],equals:Prisma.DbNull}}},orderBy:{createdAt:'desc'},take:100});
+    return rows.filter(row=>(row.payload as any)?.videoJob?.model).map(row=>this.publicTask(row));
+  }
+
+  async existingSubmission(userId:bigint,keyId:bigint,model:string,id:string,body:any) {
+    const row=await this.p.billingReservation.findFirst({where:{requestId:id,userId,apiKeyId:keyId}});
+    if(!(row?.payload as any)?.videoJob)return null;
+    if((row!.payload as any).videoJob.fingerprint!==videoRequestHash(model,body))throw badRequest('Idempotency-Key was already used with different video parameters');
+    return this.publicTask(row);
+  }
+
   private publicTask(row: any) {
     const job = row.payload?.videoJob;
     const status = row.status === "review" ? "review" : job?.state ?? "submitting";
-    return { id:row.requestId, task_id:row.requestId, object:"video.task", model:job?.model, status,
+    return { id:row.requestId, task_id:row.requestId, object:"video.task", model:job?.model, status, createdAt:row.createdAt,
       data:{task_id:row.requestId,task_status:status},
       result:job?.result ?? null,
       billing:{status:row.status,reservedUsd:Number(row.amount)/1e6,chargedUsd:Number(row.charged)/1e6,
