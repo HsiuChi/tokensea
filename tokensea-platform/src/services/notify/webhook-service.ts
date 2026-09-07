@@ -40,7 +40,7 @@ export function dispatchWebhookEvent(
         const events = (h.events as string[]) ?? [];
         return events.includes("*") || events.includes(event);
       });
-      await Promise.allSettled(targets.map((h) => deliver(prisma, h.id, h.url, h.secret, { event, payload, timestamp: new Date().toISOString() })));
+      await prisma.webhookDelivery.createMany({data:targets.map(h=>({webhookId:h.id,event,payload:JSON.parse(JSON.stringify({event,payload,timestamp:new Date().toISOString()},(_,v)=>typeof v==='bigint'?v.toString():v))}))});
     } catch (err) {
       console.error("[webhook] dispatch error:", err);
     }

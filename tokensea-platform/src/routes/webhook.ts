@@ -5,6 +5,16 @@ import { adminAuthHook } from "../middleware/user-auth.js";
 
 export async function webhookRoutes(app: FastifyInstance) {
   const svc = new WebhookService(app.prisma);
+  app.get('/deliveries',{preHandler:adminAuthHook},async()=>({data:await app.prisma.webhookDelivery.findMany({orderBy:{id:'desc'},take:50,select:{id:true,webhookId:true,event:true,status:true,attempts:true,nextAt:true,lastStatus:true,createdAt:true}})}));
+  app.post('/deliveries/:id/retry',{preHandler:adminAuthHook},async request=>{
+    const {id}=z.object({id:z.coerce.bigint()}).parse(request.params);
+    const changed=await app.prisma.$transaction(async tx=>{
+      const result=await tx.webhookDelivery.updateMany({where:{id,status:'failed'},data:{status:'pending',attempts:0,nextAt:new Date()}});
+      if(result.count)await tx.auditLog.create({data:{actorId:request.userId!,action:'webhook.manual_retry',targetType:'webhook_delivery',targetId:id.toString()}});
+      return result;
+    });
+    return {data:changed};
+  });
 
   app.get("/events", { preHandler: adminAuthHook }, async () => {
     return { data: WEBHOOK_EVENTS };

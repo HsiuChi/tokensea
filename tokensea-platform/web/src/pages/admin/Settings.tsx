@@ -40,6 +40,9 @@ export function AdminSettings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [deliveries,setDeliveries]=useState<any[]>([]);
+  const loadDeliveries=()=>api.webhookDeliveries().then(setDeliveries).catch(()=>{});
+  useEffect(()=>{void loadDeliveries();const timer=setInterval(loadDeliveries,15000);return()=>clearInterval(timer)},[]);
 
   useEffect(() => {
     api.getOptions()
@@ -274,6 +277,11 @@ export function AdminSettings() {
       </Card>
 
       {/* Webhook dialog */}
+      <Card><CardHeader><CardTitle>告警投递记录</CardTitle></CardHeader><CardContent className="space-y-3">
+        <p className="text-xs text-muted-foreground">账号额度每 5 分钟主动检查。通知持久化保存，临时故障自动重试，最多 5 次。</p>
+        {!deliveries.length&&<p className="text-sm text-muted-foreground">暂无投递记录</p>}
+        {deliveries.map(d=><div key={d.id} className="flex flex-wrap items-center justify-between gap-2 border-b py-2 text-sm"><span>{d.event} · {d.status} · {d.attempts} 次 · HTTP {d.lastStatus??'—'}</span>{d.status==='failed'&&<Button variant="outline" size="sm" onClick={async()=>{try{await api.retryWebhookDelivery(d.id);await loadDeliveries()}catch{alert('重试失败，请稍后再试')}}}>重新投递</Button>}</div>)}
+      </CardContent></Card>
       <Dialog open={showWebhookDialog} onOpenChange={(open) => { if (!open) { setShowWebhookDialog(false); setEditingWebhookId(null); } }}>
         <DialogContent>
           <DialogHeader>

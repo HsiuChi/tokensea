@@ -2,6 +2,7 @@ import { ReservationService } from "./services/billing/reservation-service.js";
 import { VideoTaskService } from "./services/billing/video-task-service.js";
 import { buildApp } from "./app.js";
 import { startHealthProbeWorker } from "./services/channel/health-probe-worker.js";
+import { startOperationsWorker } from './services/channel/operations-worker.js';
 
 async function main() {
   const { app, env, prisma, redis } = await buildApp();
@@ -15,6 +16,8 @@ async function main() {
   app.addHook("onClose",async()=>{clearInterval(billingTimer);});
   // Start the channel-node health probe worker (decoupled from request path).
   const probeWorker = startHealthProbeWorker(prisma, redis);
+  const operationsWorker=startOperationsWorker(prisma,redis,env,app.log);
+  app.addHook('onClose',async()=>{await operationsWorker.stop();});
   app.log.info("health-probe worker started");
 
   try {

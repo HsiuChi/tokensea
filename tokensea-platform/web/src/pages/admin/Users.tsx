@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "@/services/api";
-import { formatQuota, formatNumber } from "@/lib/utils";
+import { formatQuota, formatNumber,yuanToQuota,quotaToYuan } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -59,7 +59,7 @@ export function AdminUsers() {
   useEffect(() => { fetch(); }, [fetch]);
 
   const handleCreate = async () => {
-    await api.createUser({ ...createForm, quota: createForm.quota ? Number(createForm.quota) * 100 : undefined });
+    await api.createUser({ ...createForm, quota: createForm.quota ? yuanToQuota(Number(createForm.quota)) : undefined });
     setShowCreate(false);
     setCreateForm({ username: "", password: "", email: "", name: "", role: "user", quota: "" });
     fetch();
@@ -72,7 +72,7 @@ export function AdminUsers() {
       email: user.email || "",
       role: user.role,
       status: user.status,
-      quota: user.quota ? String(Math.round(user.quota / 100)) : "",
+      quota: user.quota ? String(quotaToYuan(user.quota)) : "",
     });
     setShowEdit(true);
   };
@@ -84,8 +84,8 @@ export function AdminUsers() {
     if (editForm.email !== (editingUser.email || "")) body.email = editForm.email;
     if (editForm.role !== editingUser.role) body.role = editForm.role;
     if (editForm.status !== editingUser.status) body.status = editForm.status;
-    if (editForm.quota !== "" && Number(editForm.quota) * 100 !== editingUser.quota) {
-      body.quota = Number(editForm.quota) * 100;
+    if (editForm.quota !== "" && yuanToQuota(Number(editForm.quota)) !== Number(editingUser.quota)) {
+      body.quota = yuanToQuota(Number(editForm.quota));
     }
     await api.updateUser(editingUser.id, body);
     setShowEdit(false);

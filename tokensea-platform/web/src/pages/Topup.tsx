@@ -1,309 +1,60 @@
-import { useState, useEffect } from "react"
-import { useTranslation } from "react-i18next"
-import { useAuth } from "@/hooks/useAuth"
-import { api } from "@/services/api"
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Badge } from "@/components/ui/badge"
-import { Separator } from "@/components/ui/separator"
-import { formatQuota } from "@/lib/utils"
-import {
-  Wallet, Gift, Check, CreditCard, Smartphone, Landmark,
-  Copy, Clock, AlertCircle,
-} from "lucide-react"
+import {useEffect,useState,useRef} from 'react'
+import {api} from '@/services/api'
+import {useAuth} from '@/hooks/useAuth'
+import {Card,CardHeader,CardTitle,CardContent} from '@/components/ui/card'
+import {Button} from '@/components/ui/button'
+import {Input} from '@/components/ui/input'
+import {formatQuota,formatMoney} from '@/lib/utils'
+import {Wallet,RefreshCw} from 'lucide-react'
 
-const PRESET_AMOUNTS = [10, 50, 100, 500]
-
-const PAYMENT_METHODS = [
-  { id: "stripe", name: "Stripe", icon: CreditCard, color: "bg-indigo-500" },
-  { id: "alipay", name: "Alipay", icon: Smartphone, color: "bg-blue-500" },
-  { id: "wechat", name: "WeChat Pay", icon: Landmark, color: "bg-green-500" },
-  { id: "paypal", name: "PayPal", icon: CreditCard, color: "bg-amber-500" },
-] as const
-
-interface TopUpOrder {
-  id: string
-  tradeNo: string
-  paymentMethod: string
-  amount: string
-  money: number
-  status: string
-  createdAt: string
-}
-
-export function TopupPage() {
-  const { t } = useTranslation()
-  const { user, refreshUser } = useAuth()
-  const [selectedAmount, setSelectedAmount] = useState<number | null>(null)
-  const [customAmount, setCustomAmount] = useState("")
-  const [redeemCode, setRedeemCode] = useState("")
-  const [redeeming, setRedeeming] = useState(false)
-  const [redeemResult, setRedeemResult] = useState<"success" | "error" | null>(null)
-  const [copied, setCopied] = useState(false)
-  const [paying, setPaying] = useState(false)
-  const [orders, setOrders] = useState<TopUpOrder[]>([])
-
-  useEffect(() => {
-    api.getTopupOrders().then((data) => {
-      setOrders(data.items || [])
-    }).catch(() => {})
-  }, [])
-
-  const handlePayment = async (methodId: string) => {
-    if (!selectedAmount || selectedAmount <= 0) return
-    setPaying(true)
-    try {
-      const result = await api.createTopupOrder(methodId, selectedAmount)
-      if (result.checkoutUrl) {
-        window.open(result.checkoutUrl, "_blank")
-      }
-      refreshUser()
-    } catch (err: any) {
-      alert(err.message || t("topup.comingSoon"))
-    } finally {
-      setPaying(false)
-    }
-  }
-
-  const handleCustomAmount = () => {
-    const val = Number(customAmount)
-    if (val > 0) {
-      setSelectedAmount(val)
-    }
-  }
-
-  const handleRedeem = async () => {
-    if (!redeemCode.trim()) return
-    setRedeeming(true)
-    setRedeemResult(null)
-    try {
-      await api.redeemCode(redeemCode.trim())
-      setRedeemResult("success")
-      setRedeemCode("")
-      refreshUser()
-    } catch {
-      setRedeemResult("error")
-    } finally {
-      setRedeeming(false)
-    }
-  }
-
-  const copyInviteCode = () => {
-    if (user?.inviteCode) {
-      navigator.clipboard.writeText(user.inviteCode)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    }
-  }
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">{t("topup.title")}</h1>
-        <p className="text-muted-foreground">{t("topup.subtitle")}</p>
-      </div>
-
-      {/* Current Balance */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Wallet className="h-5 w-5" /> {t("topup.currentBalance")}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="text-3xl font-bold">
-            {formatQuota(Number(user?.quota || 0) - Number(user?.usedQuota || 0))}
-          </div>
-          <p className="text-sm text-muted-foreground mt-1">
-            {t("usage.ofQuota", { quota: formatQuota(user?.quota || 0) })}
-          </p>
-        </CardContent>
-      </Card>
-
-      {/* Payment Methods */}
-      <Card>
-        <CardHeader>
-          <CardTitle>{t("topup.paymentMethods")}</CardTitle>
-          <CardDescription>{t("topup.paymentMethodsDesc")}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          {/* Quick Amount Selection */}
-          <div>
-            <Label className="text-sm font-medium">{t("topup.selectAmount")}</Label>
-            <div className="flex flex-wrap gap-2 mt-2">
-              {PRESET_AMOUNTS.map((amount) => (
-                <Button
-                  key={amount}
-                  variant={selectedAmount === amount ? "default" : "outline"}
-                  size="lg"
-                  className="min-w-[80px]"
-                  onClick={() => {
-                    setSelectedAmount(amount)
-                    setCustomAmount("")
-                  }}
-                >
-                  ${amount}
-                </Button>
-              ))}
-              <div className="flex items-center gap-2">
-                <Input
-                  type="number"
-                  min="1"
-                  placeholder={t("topup.customAmount")}
-                  value={customAmount}
-                  onChange={(e) => {
-                    setCustomAmount(e.target.value)
-                    setSelectedAmount(null)
-                  }}
-                  className="w-32"
-                />
-                <Button
-                  variant="outline"
-                  onClick={handleCustomAmount}
-                  disabled={!customAmount || Number(customAmount) <= 0}
-                >
-                  {t("topup.confirm")}
-                </Button>
-              </div>
-            </div>
-            {selectedAmount && (
-              <p className="text-sm text-muted-foreground mt-2">
-                {t("topup.selectedAmount")}: <span className="font-semibold text-foreground">${selectedAmount}</span>
-              </p>
-            )}
-          </div>
-
-          <Separator />
-
-          {/* Payment Method Cards */}
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {PAYMENT_METHODS.map((method) => (
-              <button
-                key={method.id}
-                onClick={() => handlePayment(method.id)}
-                disabled={!selectedAmount || paying}
-                className="group relative flex flex-col items-center gap-3 rounded-lg border p-4 transition-all hover:border-primary hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <div className={`flex h-10 w-10 items-center justify-center rounded-full ${method.color} text-white`}>
-                  <method.icon className="h-5 w-5" />
-                </div>
-                <span className="text-sm font-medium">{method.name}</span>
-                {selectedAmount && (
-                  <Badge variant="secondary" className="text-xs">
-                    ${selectedAmount}
-                  </Badge>
-                )}
-              </button>
-            ))}
-          </div>
-          <p className="text-xs text-muted-foreground text-center">
-            {t("topup.paymentNote")}
-          </p>
-        </CardContent>
-      </Card>
-
-      <div className="grid gap-6 md:grid-cols-2">
-        {/* Redeem Code */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Gift className="h-5 w-5" /> {t("topup.redeemCode")}
-            </CardTitle>
-            <CardDescription>{t("topup.redeemCodeDesc")}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex gap-2">
-              <Input
-                value={redeemCode}
-                onChange={(e) => setRedeemCode(e.target.value)}
-                placeholder={t("topup.enterCode")}
-              />
-              <Button onClick={handleRedeem} disabled={redeeming || !redeemCode.trim()}>
-                {redeeming ? t("common.loading") : t("topup.redeem")}
-              </Button>
-            </div>
-            {redeemResult === "success" && (
-              <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400">
-                <Check className="h-4 w-4" /> {t("topup.redeemSuccess")}
-              </div>
-            )}
-            {redeemResult === "error" && (
-              <div className="flex items-center gap-2 text-sm text-destructive">
-                <AlertCircle className="h-4 w-4" /> {t("topup.redeemFailed")}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Invite Code */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Gift className="h-5 w-5" /> {t("topup.inviteCode")}
-            </CardTitle>
-            <CardDescription>{t("usage.shareToEarn")}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center gap-2 rounded-lg border p-4">
-              <div className="flex-1">
-                <Label className="text-muted-foreground">{t("usage.inviteCode")}</Label>
-                <div className="mt-1 font-mono text-lg font-bold text-primary">
-                  {user?.inviteCode || "—"}
-                </div>
-              </div>
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={copyInviteCode}
-                disabled={!user?.inviteCode}
-                title={t("topup.copy")}
-              >
-                {copied ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
-              </Button>
-            </div>
-            <p className="text-xs text-muted-foreground">{t("topup.inviteCodeDesc")}</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Order History */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Clock className="h-5 w-5" /> {t("topup.orderHistory")}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {orders.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <Clock className="h-12 w-12 text-muted-foreground/40 mb-4" />
-              <p className="text-muted-foreground">{t("topup.noOrders")}</p>
-              <p className="text-xs text-muted-foreground mt-1">{t("topup.noOrdersDesc")}</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {orders.map((order) => (
-                <div key={order.id} className="flex items-center justify-between rounded-lg border p-4">
-                  <div>
-                    <p className="font-medium text-sm">${order.money}</p>
-                    <p className="text-xs text-muted-foreground">{order.tradeNo}</p>
-                  </div>
-                  <div className="text-right">
-                    <Badge variant={order.status === "success" ? "default" : "secondary"}>
-                      {order.status}
-                    </Badge>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {new Date(order.createdAt).toLocaleString()}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  )
+const statusName:Record<string,string>={pending:'待确认',success:'已到账',failed:'已关闭／失败',refunded:'已退款'}
+export function TopupPage(){
+ const {refreshUser}=useAuth(),[wallet,setWallet]=useState<any>(null),[methods,setMethods]=useState<any[]>([])
+ const [orders,setOrders]=useState<any[]>([]),[entries,setEntries]=useState<any[]>([]),[amount,setAmount]=useState('50')
+ const [error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[code,setCode]=useState('')
+ const [page,setPage]=useState(1),[entryPage,setEntryPage]=useState(1),[total,setTotal]=useState(0)
+ const submission=useRef<{id:string;amount:number;method:string}|null>(null)
+ const load=async()=>{try{
+  const [w,m,o,e]=await Promise.all([api.walletSummary(),api.paymentMethods(),api.getTopupOrders(page),api.walletEntries(entryPage)])
+  setWallet(w);setMethods(m.methods);setOrders(o.items);setTotal(o.total);setEntries(e)
+ }catch(e:any){setError(e.message)}}
+ useEffect(()=>{void load()},[page,entryPage])
+ useEffect(()=>{const timer=setInterval(()=>void load(),15000);return()=>clearInterval(timer)},[page,entryPage])
+ async function pay(method:string){
+  if(busy)return;setBusy(true);setError('');setNotice('')
+  try{
+   const value=Number(amount)
+   if(!submission.current||submission.current.amount!==value||submission.current.method!==method)submission.current={id:crypto.randomUUID(),amount:value,method}
+   const result=await api.createTopupOrder(method,value,submission.current.id)
+   if(result.checkoutUrl)window.location.assign(result.checkoutUrl)
+   else setNotice('订单已创建，请查看订单状态。只有服务端确认支付后才会到账。')
+   await load()
+  }catch(e:any){setError(e.message+'；如提交结果不明，请保持金额和支付方式不变重试。')}finally{setBusy(false)}
+ }
+ async function redeem(){if(busy)return;setBusy(true);setError('');setNotice('');try{const r=await api.redeemCode(code.trim());setNotice(r.message||'兑换成功');setCode('');await load();await refreshUser()}catch(e:any){setError(e.message)}finally{setBusy(false)}}
+ async function refresh(id:string){if(busy)return;setBusy(true);setError('');try{await api.refreshTopup(id);await load();await refreshUser()}catch(e:any){setError(e.message)}finally{setBusy(false)}}
+ return <div className="space-y-6">
+  <div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold">钱包与充值</h1><p className="mt-1 text-sm text-muted-foreground">人民币展示，美元账本；消费与资金变动分别记账。</p></div><Button variant="outline" onClick={()=>void load()}><RefreshCw className="mr-2 size-4"/>刷新</Button></div>
+  {error&&<p role="alert" className="rounded-xl bg-red-500/10 p-4 text-sm text-red-600">{error}</p>}
+  {notice&&<p role="status" className="rounded-xl bg-emerald-500/10 p-4 text-sm">{notice}</p>}
+  <div className="grid gap-4 sm:grid-cols-3">{[['可用余额',wallet?.available],['处理中冻结',wallet?.held],['累计已用',wallet?.used]].map(([label,value])=><Card key={label}><CardHeader><CardTitle className="text-sm text-muted-foreground">{label}</CardTitle></CardHeader><CardContent className="text-xl font-semibold">{wallet?value===null?'不限额':formatQuota(value):'—'}</CardContent></Card>)}</div>
+  {wallet&&!wallet.balanced&&<p className="text-sm text-amber-600">钱包流水存在差异，请联系管理员核对；系统不会自动改动余额。</p>}
+  <Card><CardHeader><CardTitle className="flex items-center gap-2"><Wallet className="size-5"/>余额充值</CardTitle></CardHeader><CardContent className="space-y-4">
+   {!methods.some(m=>m.enabled)&&<p className="rounded-xl bg-blue-500/5 p-4 text-sm">在线支付暂未开放，支付宝和微信商户尚未配置。你仍可使用兑换码充值。</p>}
+   <label className="block text-sm">充值预算（人民币元）<Input aria-label="充值金额" className="mt-2 max-w-xs" type="number" min="1" max="10000" step="0.01" value={amount} onChange={e=>setAmount(e.target.value)}/></label>
+   <p className="text-xs text-muted-foreground">固定参考汇率 ¥7.2 / $1。Stripe 按美元分取整，实际收费以结账页为准，按实付美元等额入账。</p>
+   <div className="grid gap-3 sm:grid-cols-3">{methods.map(m=><div key={m.id} className="rounded-xl border p-3"><Button className="w-full" disabled={!m.enabled||busy} onClick={()=>pay(m.id)}>{m.name}{!m.enabled?' · 未开放':''}</Button>{!m.enabled&&<p className="mt-2 text-xs text-muted-foreground">{m.reason}</p>}</div>)}</div>
+  </CardContent></Card>
+  <Card><CardHeader><CardTitle>兑换码</CardTitle></CardHeader><CardContent className="flex gap-3"><Input aria-label="兑换码" value={code} onChange={e=>setCode(e.target.value)} placeholder="输入兑换码"/><Button disabled={busy||!code.trim()} onClick={redeem}>兑换</Button></CardContent></Card>
+  <Card><CardHeader><CardTitle>充值订单</CardTitle></CardHeader><CardContent className="space-y-3">
+   {!orders.length&&<p className="text-sm text-muted-foreground">暂无充值订单</p>}
+   {orders.map(o=><div key={o.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border p-3 text-sm"><div><p className="font-semibold">{o.currency==='usd'?'$':o.currency==='cny'?'¥':''}{o.money} {o.currency==='legacy'?'（历史单位待核对）':''} · {statusName[o.status]||o.status}</p><p className="break-all text-xs text-muted-foreground">{o.tradeNo} · {new Date(o.createdAt).toLocaleString()}</p>{o.unitVersion!=='legacy'&&<p className="text-xs text-muted-foreground">入账额度：{formatQuota(o.amount)}</p>}</div>{o.status==='pending'&&<Button variant="outline" disabled={busy} onClick={()=>refresh(o.id)}>核验支付状态</Button>}</div>)}
+   <div className="flex gap-2"><Button variant="ghost" disabled={page===1} onClick={()=>setPage(page-1)}>上一页</Button><Button variant="ghost" disabled={page*20>=total} onClick={()=>setPage(page+1)}>下一页</Button></div>
+  </CardContent></Card>
+  <Card><CardHeader><CardTitle>资金变动流水</CardTitle></CardHeader><CardContent className="space-y-3"><p className="text-xs text-muted-foreground">{wallet?.history} API 消费明细请查看“使用记录”。</p>
+   {!entries.length&&<p className="text-sm text-muted-foreground">暂无新资金变动</p>}
+   {entries.map(e=><div key={e.id} className="flex flex-wrap justify-between gap-2 border-b py-3 text-sm"><div><p>{e.reason}</p><p className="text-xs text-muted-foreground">{new Date(e.createdAt).toLocaleString()} · {e.reference}</p></div><span className={Number(e.delta)>=0?'text-emerald-600':'text-amber-600'}>{Number(e.delta)>=0?'+':''}{formatMoney(Number(e.delta)/1e6)}</span></div>)}
+   <div className="flex gap-2"><Button variant="ghost" disabled={entryPage===1} onClick={()=>setEntryPage(entryPage-1)}>上一页</Button><Button variant="ghost" disabled={entries.length<20} onClick={()=>setEntryPage(entryPage+1)}>下一页</Button></div>
+  </CardContent></Card>
+ </div>
 }

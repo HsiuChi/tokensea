@@ -28,6 +28,7 @@ export const envSchema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().optional(),
 
   // Payment
+  PAYMENTS_ENABLED: z.enum(["true", "false"]).default("false"),
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
 

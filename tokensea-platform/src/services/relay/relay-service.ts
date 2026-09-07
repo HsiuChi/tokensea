@@ -8,6 +8,7 @@ import { safeErrorCode } from "../log/request-detail.js";
 import { dispatchWebhookEvent } from "../notify/webhook-service.js";
 import { calculateTokenPrice, openAiUsage, type TokenUsage } from "../billing/token-pricing.js";
 import { ipAllowed } from "../../lib/ip-policy.js";
+import { admit,checkPlanModel } from './admission.js';
 import { hashApiKey } from "../../lib/crypto.js";
 import { verifyToken } from "../../lib/jwt.js";
 import { redisKeys } from "../../lib/redis-keys.js";
@@ -72,6 +73,7 @@ export class RelayService {
     const body = request.body as any;
     const requestedModel = body.model ?? (request.query as any).model;
     if (!requestedModel) throw forbidden("Model is required");
+    checkPlanModel(apiKey.plan,requestedModel);
 
     // Model whitelist: key-level overrides group-level; both empty = all allowed.
     const keyModels = apiKey.models as string[] | null;
@@ -88,7 +90,10 @@ export class RelayService {
 
     // ④ Rate limit checks (Redis) — defaults if no plan; skipped for probe
     const plan = apiKey.plan;
-    if (!isProbe) await this.checkRateLimit(apiKey.userId, plan);
+    if(body.max_tokens===undefined&&body.max_completion_tokens===undefined&&body.max_output_tokens===undefined){
+      if(request.url.includes('/responses'))body.max_output_tokens=4096;else body.max_tokens=4096;
+    }
+    if (!isProbe) await this.checkRateLimit(apiKey.userId,plan,body,reply,true);
 
     // ⑤½ Sensitive word filtering — skipped for probe
     if (!isProbe) {
@@ -253,6 +258,7 @@ export class RelayService {
     if (apiKey.user.status !== "active") throw forbidden("Account is disabled");
     const params = request.params as { model: string; "*": string };
     const model = params.model, suffix = params["*"];
+    checkPlanModel(apiKey.plan,model);
     const tasks = new VideoTaskService(this.prisma);
     if (request.method === "GET") {
       // Polling is wallet-independent and owner-scoped, never forwarded to a random shared key.
@@ -268,7 +274,7 @@ export class RelayService {
     const body = (request.body ?? {}) as Record<string,any>;
     const existing=await tasks.existingSubmission(apiKey.userId,apiKey.id,model,id,body);
     if(existing)return reply.code(202).send(existing);
-    await this.checkRateLimit(apiKey.userId,apiKey.plan);
+    await this.checkRateLimit(apiKey.userId,apiKey.plan,request.body,reply,false);
     const text = this.extractContentText(body);
     if (text && (await new SensitiveWordService(this.prisma,this.redis).checkContent(text)).blocked) throw badRequest("Content contains prohibited content");
     const {alias,routes} = await this.resolveRoute(model);
@@ -487,26 +493,8 @@ export class RelayService {
 
   // ---- Rate limit ----
 
-  private async checkRateLimit(userId: bigint, plan: any | null) {
-    const qpsLimit = plan?.qpsLimit ?? 5;
-    const rpmLimit = plan?.rpmLimit ?? 60;
-    const now = Date.now();
-
-    // QPS
-    if (qpsLimit > 0) {
-      const key = redisKeys.qps(userId);
-      const count = await this.redis.incr(key);
-      if (count === 1) await this.redis.expire(key, 1);
-      if (count > qpsLimit) throw rateLimited("QPS limit exceeded");
-    }
-
-    // RPM
-    if (rpmLimit > 0) {
-      const key = redisKeys.rpm(userId);
-      const count = await this.redis.incr(key);
-      if (count === 1) await this.redis.expire(key, 60);
-      if (count > rpmLimit) throw rateLimited("RPM limit exceeded");
-    }
+  private async checkRateLimit(userId: bigint, plan:any,body:any,reply:FastifyReply,text:boolean) {
+    return admit(this.redis,userId,plan,body,reply,text);
   }
 
   // ---- Routing ----
@@ -729,7 +717,7 @@ export class RelayService {
     }
 
     await this.checkQuota(apiKey);
-    await this.checkRateLimit(apiKey.userId, apiKey.plan);
+    await this.checkRateLimit(apiKey.userId,apiKey.plan,request.body,reply,false);
 
     // Sensitive word check on prompt
     const prompt = body.prompt ?? "";
@@ -739,6 +727,7 @@ export class RelayService {
       if (check.blocked) throw badRequest("Content contains prohibited content");
     }
 
+    checkPlanModel(apiKey.plan,requestedModel);
     // Route to node (legacy single-node path for image/embeddings)
     const { alias, routes } = await this.resolveRoute(requestedModel);
     const channels = await this.resolveChannels(routes);
@@ -805,7 +794,7 @@ export class RelayService {
     if (apiKey.user.status === "disabled") throw forbidden("Account is disabled");
 
     await this.checkQuota(apiKey);
-    await this.checkRateLimit(apiKey.userId, apiKey.plan);
+    await this.checkRateLimit(apiKey.userId,apiKey.plan,request.body,reply,false);
 
     // ② Parse multipart form
     const parts = request.parts();
@@ -845,6 +834,7 @@ export class RelayService {
       if (check.blocked) throw badRequest("Content contains prohibited content");
     }
 
+    checkPlanModel(apiKey.plan,requestedModel);
     // Route to node (legacy single-node path for image/embeddings)
     const { alias, routes } = await this.resolveRoute(requestedModel);
     const channels = await this.resolveChannels(routes);

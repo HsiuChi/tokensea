@@ -1,7 +1,9 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
-import { formatMoney } from "../../../src/shared/money"
+import { formatMoney,CNY_PER_USD } from "../../../src/shared/money"
 export { formatMoney, CNY_PER_USD } from "../../../src/shared/money"
+export const yuanToQuota=(yuan:number)=>Math.round(yuan/CNY_PER_USD*1_000_000)
+export const quotaToYuan=(quota:number|string)=>Number(quota)/1_000_000*CNY_PER_USD
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))

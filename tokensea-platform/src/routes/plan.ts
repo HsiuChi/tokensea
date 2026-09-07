@@ -36,9 +36,9 @@ export async function planRoutes(app: FastifyInstance) {
       tokenLimit: z.coerce.bigint().optional(),
       billableUnitLimit: z.coerce.bigint().optional(),
       dailyBillableUnitLimit: z.coerce.bigint().optional(),
-      qpsLimit: z.number().int().optional(),
-      rpmLimit: z.number().int().optional(),
-      tpmLimit: z.number().int().optional(),
+      qpsLimit: z.number().int().min(0).max(10000).optional(),
+      rpmLimit: z.number().int().min(0).max(1000000).optional(),
+      tpmLimit: z.number().int().min(0).max(100000000).optional(),
       maxTokensPerRequest: z.number().int().optional(),
       allowedModelAliases: z.array(z.string()),
       billingCycleType: z.string().optional(),
@@ -55,7 +55,10 @@ export async function planRoutes(app: FastifyInstance) {
   // Admin: update plan
   app.put("/:id", { preHandler: adminAuthHook }, async (request) => {
     const { id } = z.object({ id: z.coerce.bigint() }).parse(request.params);
-    const body = request.body as Record<string, any>;
+    const body = z.object({name:z.string().min(1).max(64).optional(),displayName:z.string().min(1).max(64).optional(),description:z.string().max(512).optional(),
+      qpsLimit:z.number().int().min(0).max(10000).optional(),rpmLimit:z.number().int().min(0).max(1000000).optional(),tpmLimit:z.number().int().min(0).max(100000000).optional(),
+      allowedModelAliases:z.array(z.string().max(64)).max(1000).optional()
+    }).strict().parse(request.body);
     return { data: await planService.update(id, body) };
   });
 

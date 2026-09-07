@@ -1,220 +1,30 @@
-import { useEffect, useState, useCallback } from "react";
-import { useTranslation } from "react-i18next";
-import { api } from "@/services/api";
-import { formatQuota } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Skeleton } from "@/components/ui/skeleton";
-
-interface Plan {
-  id: string;
-  name: string;
-  description: string;
-  price: number;
-  quota: number;
-  durationDays: number;
-  maxKeys: number;
-  maxRequestsPerDay: number | null;
-  models: string[];
-  status: string;
-}
-
-interface PlanForm {
-  name: string;
-  description: string;
-  price: string;
-  quota: string;
-  durationDays: string;
-  maxKeys: string;
-  maxRequestsPerDay: string;
-  models: string;
-}
-
-const emptyForm: PlanForm = {
-  name: "", description: "", price: "", quota: "",
-  durationDays: "30", maxKeys: "5", maxRequestsPerDay: "", models: "",
-};
-
-export function AdminPlans() {
-  const { t } = useTranslation();
-  const [plans, setPlans] = useState<Plan[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showCreate, setShowCreate] = useState(false);
-  const [editId, setEditId] = useState<string | null>(null);
-  const [form, setForm] = useState<PlanForm>({ ...emptyForm });
-
-  const fetch = useCallback(() => {
-    setLoading(true);
-    api.listPlans()
-      .then(setPlans)
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => { fetch(); }, [fetch]);
-
-  const handleCreate = async () => {
-    await api.createPlan({
-      name: form.name,
-      description: form.description,
-      price: form.price ? BigInt(Math.round(Number(form.price) * 100)) : BigInt(0),
-      quota: form.quota ? BigInt(Math.round(Number(form.quota) * 100)) : BigInt(0),
-      durationDays: Number(form.durationDays),
-      maxKeys: Number(form.maxKeys),
-      maxRequestsPerDay: form.maxRequestsPerDay ? Number(form.maxRequestsPerDay) : null,
-      models: form.models ? form.models.split(",").map((s) => s.trim()) : [],
-    });
-    setShowCreate(false);
-    setForm({ ...emptyForm });
-    fetch();
-  };
-
-  const handleUpdate = async () => {
-    await api.updatePlan(editId!, {
-      name: form.name,
-      description: form.description,
-      price: form.price ? BigInt(Math.round(Number(form.price) * 100)) : BigInt(0),
-      quota: form.quota ? BigInt(Math.round(Number(form.quota) * 100)) : BigInt(0),
-      durationDays: Number(form.durationDays),
-      maxKeys: Number(form.maxKeys),
-      maxRequestsPerDay: form.maxRequestsPerDay ? Number(form.maxRequestsPerDay) : null,
-      models: form.models ? form.models.split(",").map((s) => s.trim()) : [],
-    });
-    setEditId(null);
-    setForm({ ...emptyForm });
-    fetch();
-  };
-
-  const handleDelete = async (id: string) => {
-    if (!confirm(t("admin.plans.deleteConfirm"))) return;
-    await api.deletePlan(id);
-    fetch();
-  };
-
-  const startEdit = (p: Plan) => {
-    setEditId(p.id);
-    setForm({
-      name: p.name || "",
-      description: p.description || "",
-      price: (Number(p.price) / 100).toString(),
-      quota: (Number(p.quota) / 100).toString(),
-      durationDays: p.durationDays?.toString() || "30",
-      maxKeys: p.maxKeys?.toString() || "5",
-      maxRequestsPerDay: p.maxRequestsPerDay?.toString() || "",
-      models: p.models?.join(", ") || "",
-    });
-  };
-
-  const openCreate = () => {
-    setForm({ ...emptyForm });
-    setEditId(null);
-    setShowCreate(true);
-  };
-
-  const dialogOpen = showCreate || editId !== null;
-  const setDialogOpen = (open: boolean) => {
-    if (!open) {
-      setShowCreate(false);
-      setEditId(null);
-      setForm({ ...emptyForm });
-    }
-  };
-
-  const fields: { key: keyof PlanForm; label: string; type: string }[] = [
-    { key: "name", label: t("admin.plans.planName"), type: "text" },
-    { key: "description", label: t("admin.plans.description"), type: "text" },
-    { key: "price", label: t("admin.plans.priceYuan"), type: "number" },
-    { key: "quota", label: t("admin.plans.quotaYuan"), type: "number" },
-    { key: "durationDays", label: t("admin.plans.durationDays"), type: "number" },
-    { key: "maxKeys", label: t("admin.plans.maxKeys"), type: "number" },
-    { key: "maxRequestsPerDay", label: t("admin.plans.maxRequestsPerDay"), type: "number" },
-    { key: "models", label: t("admin.plans.models"), type: "text" },
-  ];
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">{t("admin.plans.title")}</h1>
-          <p className="text-muted-foreground">{t("admin.plans.subtitle")}</p>
-        </div>
-        <Button onClick={openCreate}>{t("admin.plans.createPlan")}</Button>
-      </div>
-
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>{editId ? t("admin.plans.editPlan") : t("admin.plans.createPlanTitle")}</DialogTitle>
-            <DialogDescription>{editId ? t("admin.plans.editPlanDesc") : t("admin.plans.createPlanDesc")}</DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-4 py-4">
-            {fields.map((f) => (
-              <div key={f.key} className="grid gap-2">
-                <Label>{f.label}</Label>
-                <Input
-                  type={f.type}
-                  value={form[f.key]}
-                  onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
-                />
-              </div>
-            ))}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)}>{t("common.cancel")}</Button>
-            <Button onClick={editId ? handleUpdate : handleCreate}>
-              {editId ? t("common.update") : t("common.create")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {loading ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Card key={i}><CardContent className="p-6"><Skeleton className="h-40" /></CardContent></Card>
-          ))}
-        </div>
-      ) : plans.length === 0 ? (
-        <div className="py-10 text-center text-muted-foreground">{t("common.noData")}</div>
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {plans.map((p) => (
-            <Card key={p.id}>
-              <CardHeader className="pb-2">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle className="text-lg">{p.name}</CardTitle>
-                    <p className="text-sm text-muted-foreground mt-1">{p.description || ""}</p>
-                  </div>
-                  <Badge variant={p.status === "active" ? "success" : "destructive"}>
-                    {p.status === "active" ? t("common.active") : t("common.disabled")}
-                  </Badge>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold tracking-tight mb-3">
-                  {formatQuota(p.price)}
-                  <span className="text-sm font-normal text-muted-foreground"> / {p.durationDays} {t("admin.plans.days")}</span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-sm text-muted-foreground mb-4">
-                  <div>{t("common.quota")}: {formatQuota(p.quota)}</div>
-                  <div>{t("admin.plans.maxKeys")}: {p.maxKeys}</div>
-                  <div>{t("admin.plans.maxReqDay")}: {p.maxRequestsPerDay || t("common.unlimited")}</div>
-                  <div>{t("admin.plans.models")}: {p.models?.length || 0}</div>
-                </div>
-                <div className="flex gap-2">
-                  <Button size="sm" variant="outline" onClick={() => startEdit(p)}>{t("common.edit")}</Button>
-                  <Button size="sm" variant="destructive" onClick={() => handleDelete(p.id)}>{t("common.delete")}</Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
-    </div>
-  );
+import {useEffect,useState} from 'react'
+import {api} from '@/services/api'
+import {Card,CardContent,CardHeader,CardTitle} from '@/components/ui/card'
+import {Button} from '@/components/ui/button'
+import {Input} from '@/components/ui/input'
+import {Dialog,DialogContent,DialogHeader,DialogTitle} from '@/components/ui/dialog'
+const initial={name:'',displayName:'',description:'',qpsLimit:5,rpmLimit:60,tpmLimit:100000,allowedModelAliases:''}
+export function AdminPlans(){
+ const [plans,setPlans]=useState<any[]>([]),[form,setForm]=useState(initial),[editing,setEditing]=useState<string|null>(null),[open,setOpen]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('')
+ const load=()=>api.listPlans().then(setPlans).catch(e=>setError(e.message))
+ useEffect(()=>{void load()},[])
+ const edit=(p:any)=>{setEditing(p.id);setForm({name:p.name,displayName:p.displayName,description:p.description??'',qpsLimit:p.qpsLimit,rpmLimit:p.rpmLimit,tpmLimit:p.tpmLimit,allowedModelAliases:(p.allowedModelAliases??[]).join(',')});setOpen(true)}
+ async function save(){setBusy(true);setError('');try{
+  const payload={...form,allowedModelAliases:form.allowedModelAliases.split(',').map(s=>s.trim()).filter(Boolean)}
+  if(editing)await api.updatePlan(editing,payload)
+  else await api.createPlan({...payload,tier:'starter',isSubscription:false,isPublic:false})
+  setOpen(false);await load()
+ }catch(e:any){setError(e.message)}finally{setBusy(false)}}
+ return <div className="space-y-5"><div className="flex justify-between"><h1 className="text-2xl font-bold">套餐与访问策略</h1><Button onClick={()=>{setEditing(null);setForm(initial);setOpen(true)}}>添加访问策略</Button></div>
+  <p className="rounded-xl bg-amber-500/10 p-4 text-sm">套餐销售与续费已关闭，不会扣款或发放额度。这里只管理已有 API Key 绑定策略的权限与限流，不改动历史套餐价格和额度。</p>
+  <p className="text-xs text-muted-foreground">TPM 按请求输入及最大输出预算预留，60 秒窗口自动释放；不是计费 Token 数。用户并发默认 4，可由服务器 USER_MAX_CONCURRENT 配置。</p>
+  {error&&<p role="alert" className="text-sm text-red-600">{error}</p>}
+  <div className="grid gap-4 md:grid-cols-2">{plans.map(p=><Card key={p.id}><CardHeader><CardTitle>{p.displayName||p.name}</CardTitle></CardHeader><CardContent className="space-y-3"><p className="text-sm text-muted-foreground">{p.description}</p><p className="text-sm">QPS {p.qpsLimit||'不限'} · RPM {p.rpmLimit||'不限'} · TPM {p.tpmLimit||'不限'}</p><p className="break-all text-xs text-muted-foreground">允许模型：{p.allowedModelAliases?.join(', ')||'不额外限制'}</p><Button variant="outline" onClick={()=>edit(p)}>编辑策略</Button></CardContent></Card>)}</div>
+  <Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>{editing?'编辑策略':'添加策略'}</DialogTitle></DialogHeader>
+   {(['name','displayName','description','allowedModelAliases'] as const).map((key,i)=><label className="text-sm" key={key}>{['标识名称','显示名称','说明','允许模型（逗号分隔）'][i]}<Input value={form[key]} onChange={e=>setForm({...form,[key]:e.target.value})}/></label>)}
+   {(['qpsLimit','rpmLimit','tpmLimit'] as const).map((key,i)=><label className="text-sm" key={key}>{['每秒请求数','每分钟请求数','每分钟 Token 预算'][i]}（0 不限）<Input type="number" min="0" value={form[key]} onChange={e=>setForm({...form,[key]:Number(e.target.value)})}/></label>)}
+   <Button disabled={busy} onClick={save}>{busy?'保存中…':'保存'}</Button>
+  </DialogContent></Dialog>
+ </div>
 }

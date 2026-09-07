@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "@/services/api";
-import { formatQuota } from "@/lib/utils";
+import { formatQuota,yuanToQuota } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -66,7 +66,7 @@ export function AdminRedemptions() {
   const handleCreate = async () => {
     await api.createRedemption({
       name: createForm.name,
-      quota: createForm.quota ? BigInt(Math.round(Number(createForm.quota) * 100)) : BigInt(0),
+      quota: createForm.quota ? String(yuanToQuota(Number(createForm.quota))) : '0',
       durationDays: Number(createForm.durationDays),
     });
     setShowCreate(false);
@@ -77,7 +77,7 @@ export function AdminRedemptions() {
   const handleBatchCreate = async () => {
     await api.batchCreateRedemptions({
       name: batchForm.name,
-      quota: batchForm.quota ? BigInt(Math.round(Number(batchForm.quota) * 100)) : BigInt(0),
+      quota: batchForm.quota ? String(yuanToQuota(Number(batchForm.quota))) : '0',
       count: Number(batchForm.count),
       durationDays: Number(batchForm.durationDays),
     });

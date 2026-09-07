@@ -539,7 +539,7 @@ const en = {
       createUser: "+ Create User",
       searchUsers: "Search users...",
       createUserTitle: "Create User",
-      quotaCents: "Quota (cents)",
+      quotaCents: "Total quota (CNY, including used)",
       username: "Username",
       email: "Email",
       role: "Role",

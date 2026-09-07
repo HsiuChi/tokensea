@@ -43,6 +43,10 @@ export class OperationsService {
         accounts.push(...await Promise.all(data.files.slice(i,i+4).map(async (f: any) => {
           const index = String(f.auth_index ?? "");
           const account: any = { id: index, name: String(f.email ?? f.name ?? f.label ?? "CPA 账号"), provider: f.provider ?? f.type, disabled: !!f.disabled, status: f.status ?? "unknown", unavailable: !!f.unavailable, windows: [], quotaMessage: "上游未提供额度", checkedAt: new Date().toISOString() };
+          if(account.unavailable&&!account.disabled){
+            const claimed=await this.redis.set('ops:account-unavailable:'+node.id+':'+index,'1','EX',3600,'NX');
+            if(claimed)dispatchWebhookEvent(this.prisma,'node.degraded',{nodeId:node.id.toString(),account:account.name,reason:'CPA reports account unavailable; inspect provider status'});
+          }
           if (index && account.provider === "codex" && !account.disabled) {
             try {
               const header: Record<string,string> = { Authorization: "Bearer $TOKEN$", "Content-Type": "application/json" };

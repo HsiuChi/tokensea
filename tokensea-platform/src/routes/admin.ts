@@ -4,6 +4,8 @@ import { hashPassword } from "../lib/password.js";
 import { adminAuthHook, rootAuthHook } from "../middleware/user-auth.js";
 import { notFound, badRequest } from "../lib/errors.js";
 import { LogService } from "../services/log/log-service.js";
+import { walletChange } from '../services/quota/wallet-service.js';
+import { randomUUID } from 'node:crypto';
 
 export async function adminRoutes(app: FastifyInstance) {
   const logService = new LogService(app.prisma);
@@ -94,7 +96,16 @@ export async function adminRoutes(app: FastifyInstance) {
       remark: z.string().optional(),
     }).parse(request.body);
 
-    const user = await app.prisma.user.update({ where: { id }, data: body });
+    const user = await app.prisma.$transaction(async tx=>{
+      await tx.$queryRaw`SELECT id FROM users WHERE id=${id} FOR UPDATE`;
+      const {quota,...profile}=body;
+      if(quota!==undefined){
+        const previous=await tx.user.findUniqueOrThrow({where:{id}});
+        if(quota<0n)throw badRequest('请使用有限的钱包金额');
+        await walletChange(tx,id,quota-previous.quota,'admin:'+randomUUID(),'adjustment',body.remark||'管理员调整余额',request.userId!);
+      }
+      return tx.user.update({where:{id},data:profile});
+    });
     audit(request, "update_user", "user", id.toString(), body);
     return { data: user };
   });

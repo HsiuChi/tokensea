@@ -539,7 +539,7 @@ const zh = {
       createUser: "+ 创建用户",
       searchUsers: "搜索用户...",
       createUserTitle: "创建用户",
-      quotaCents: "配额（分）",
+      quotaCents: "累计额度（人民币元，含已用）",
       username: "用户名",
       email: "邮箱",
       role: "角色",

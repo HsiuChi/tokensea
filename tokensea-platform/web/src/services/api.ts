@@ -186,8 +186,14 @@ export const api = {
     request<any>(`/api/admin/announcements/${id}`, { method: "DELETE" }),
 
   // Topup
-  createTopupOrder: (paymentMethod: string, amount: number) =>
-    request<any>("/api/topup/order", { method: "POST", body: JSON.stringify({ paymentMethod, amount }) }),
+  createTopupOrder: (paymentMethod: string, amount: number, idempotencyKey:string) =>
+    request<any>("/api/topup/order", { method: "POST", body: JSON.stringify({ paymentMethod, amount,idempotencyKey }) }),
+  paymentMethods:()=>request<any>('/api/topup/methods'),
+  walletSummary:()=>request<any>('/api/topup/wallet'),
+  walletEntries:(page=1)=>request<any>('/api/topup/wallet/entries?page='+page),
+  refreshTopup:(id:string)=>request<any>('/api/topup/orders/'+id+'/refresh',{method:'POST'}),
+  webhookDeliveries:()=>request<any>('/api/webhook/deliveries'),
+  retryWebhookDelivery:(id:string)=>request<any>('/api/webhook/deliveries/'+id+'/retry',{method:'POST'}),
   getTopupOrders: (page = 1) =>
     request<any>(`/api/topup/orders?page=${page}`),
 
