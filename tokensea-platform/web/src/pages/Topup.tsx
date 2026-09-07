@@ -37,7 +37,7 @@ export function TopupPage(){
   <div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold">钱包与充值</h1><p className="mt-1 text-sm text-muted-foreground">人民币展示，美元账本；消费与资金变动分别记账。</p></div><Button variant="outline" onClick={()=>void load()}><RefreshCw className="mr-2 size-4"/>刷新</Button></div>
   {error&&<p role="alert" className="rounded-xl bg-red-500/10 p-4 text-sm text-red-600">{error}</p>}
   {notice&&<p role="status" className="rounded-xl bg-emerald-500/10 p-4 text-sm">{notice}</p>}
-  <div className="grid gap-4 sm:grid-cols-3">{[['可用余额',wallet?.available],['处理中冻结',wallet?.held],['累计已用',wallet?.used]].map(([label,value])=><Card key={label}><CardHeader><CardTitle className="text-sm text-muted-foreground">{label}</CardTitle></CardHeader><CardContent className="text-xl font-semibold">{wallet?value===null?'不限额':formatQuota(value):'—'}</CardContent></Card>)}</div>
+  <div className="grid gap-4 sm:grid-cols-3">{[['可用余额',wallet?.available],['处理中冻结',wallet?.held],['累计已用',wallet?.used]].map(([label,value])=><Card key={label}><CardHeader><CardTitle className="text-sm text-muted-foreground">{label}</CardTitle></CardHeader><CardContent className="text-xl font-semibold">{wallet?value===null?'不限额':formatMoney(Number(value)/1e6):'—'}</CardContent></Card>)}</div>
   {wallet&&!wallet.balanced&&<p className="text-sm text-amber-600">钱包流水存在差异，请联系管理员核对；系统不会自动改动余额。</p>}
   <Card><CardHeader><CardTitle className="flex items-center gap-2"><Wallet className="size-5"/>余额充值</CardTitle></CardHeader><CardContent className="space-y-4">
    {!methods.some(m=>m.enabled)&&<p className="rounded-xl bg-blue-500/5 p-4 text-sm">在线支付暂未开放，支付宝和微信商户尚未配置。你仍可使用兑换码充值。</p>}
